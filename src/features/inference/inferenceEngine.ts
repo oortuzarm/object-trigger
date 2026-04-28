@@ -1,7 +1,25 @@
+/**
+ * INFERENCE ENGINE
+ *
+ * Frame pipeline (must mirror the training preprocessing exactly):
+ *   1. Capture raw 224×224 square crop from video
+ *   2. detectAndCrop() → same object-isolation preprocessing used at capture time
+ *      (COCO-SSD → saliency → center fallback)
+ *   3. canvas → tf.Tensor directly (no blob/bitmap roundtrip, avoids OffscreenCanvas compat issues)
+ *   4. MobileNet feature extraction
+ *   5. Classifier predict → all class probabilities
+ *   6. Temporal smoothing (5-frame window)
+ */
+
 import * as tf from '@tensorflow/tfjs'
-import { loadFeatureExtractor, extractFeatures } from '@/features/training/featureExtractor'
+import { loadFeatureExtractor } from '@/features/training/featureExtractor'
 import { deserializeModel } from '@/features/training/modelSerializer'
 import { PredictionSmoother } from './predictionSmoothing'
+// --- Object segmentation preprocessing (must match training pipeline) ---
+import {
+  detectAndCrop,
+  preloadDetector,
+} from '@/features/segmentation/objectCropper'
 import type { DetectionResult } from '@/types/inference.types'
 
 export class InferenceEngine {
@@ -19,7 +37,15 @@ export class InferenceEngine {
     onReady?: () => void
   ): Promise<void> {
     this.classIds = classIds
-    this.extractor = await loadFeatureExtractor()
+
+    // Load feature extractor and COCO-SSD detector in parallel.
+    // COCO-SSD must be preloaded here so inference frames get the same
+    // object-crop preprocessing that was applied during training capture.
+    const [extractor] = await Promise.all([
+      loadFeatureExtractor(),
+      preloadDetector(),
+    ])
+    this.extractor = extractor
     this.model = await deserializeModel(artifacts)
     onReady?.()
   }
@@ -27,7 +53,8 @@ export class InferenceEngine {
   start(
     videoEl: HTMLVideoElement,
     onDetection: (result: DetectionResult | null) => void,
-    onFps: (fps: number) => void
+    onFps: (fps: number) => void,
+    onError?: (msg: string) => void
   ) {
     if (this.rafId !== null) this.stop()
     this.smoother.reset()
@@ -39,28 +66,55 @@ export class InferenceEngine {
       }
 
       try {
-        // Capture frame
-        const canvas = document.createElement('canvas')
-        canvas.width = 224
-        canvas.height = 224
-        const ctx = canvas.getContext('2d')!
+        // ── Step 1: Capture raw 224×224 square from video ──────────────────
+        const rawCanvas = document.createElement('canvas')
+        rawCanvas.width = 224
+        rawCanvas.height = 224
+        const rawCtx = rawCanvas.getContext('2d')!
         const vw = videoEl.videoWidth
         const vh = videoEl.videoHeight
         const size = Math.min(vw, vh)
         const ox = (vw - size) / 2
         const oy = (vh - size) / 2
-        ctx.drawImage(videoEl, ox, oy, size, size, 0, 0, 224, 224)
-        const imageData = ctx.getImageData(0, 0, 224, 224)
+        rawCtx.drawImage(videoEl, ox, oy, size, size, 0, 0, 224, 224)
+        const rawImageData = rawCtx.getImageData(0, 0, 224, 224)
 
-        // Extract features + predict
-        const blob = await new Promise<Blob>((res) => canvas.toBlob((b) => res(b!), 'image/jpeg', 0.8))
-        const features = await extractFeatures(blob, this.extractor)
+        // ── Step 2: Object-crop preprocessing (mirrors training pipeline) ──
+        // detectAndCrop() applies COCO-SSD → saliency → center fallback,
+        // exactly as useCapture.ts does during sample collection.
+        const cropResult = await detectAndCrop(rawImageData)
 
-        const input = tf.tensor2d([Array.from(features)])
+        // ── Step 3: Canvas → tensor (no blob/bitmap roundtrip) ────────────
+        // Using a regular canvas avoids OffscreenCanvas compatibility issues
+        // in the main thread on some mobile browsers.
+        const cropCanvas = document.createElement('canvas')
+        cropCanvas.width = 224
+        cropCanvas.height = 224
+        cropCanvas.getContext('2d')!.putImageData(cropResult.imageData, 0, 0)
+
+        const tensor = tf.tidy(() =>
+          (tf.browser.fromPixels(cropCanvas) as tf.Tensor3D)
+            .expandDims(0)
+            .toFloat()
+            .div(255)
+        )
+
+        // ── Step 4: Feature extraction ─────────────────────────────────────
+        // infer(tensor, true) returns the penultimate-layer 1024-dim embedding
+        const embeddings = this.extractor.infer(
+          tensor as tf.Tensor<tf.Rank>,
+          true
+        ) as tf.Tensor
+        const features = Array.from((await embeddings.data()) as Float32Array)
+        tf.dispose([tensor, embeddings])
+
+        // ── Step 5: Classify ───────────────────────────────────────────────
+        const input = tf.tensor2d([features])
         const output = this.model.predict(input) as tf.Tensor
         const probs = Array.from((await output.data()) as Float32Array)
         tf.dispose([input, output])
 
+        // ── Step 6: Smooth + emit ──────────────────────────────────────────
         const maxIdx = probs.indexOf(Math.max(...probs))
         const maxConf = probs[maxIdx]
 
@@ -70,14 +124,16 @@ export class InferenceEngine {
         if (smoothed) {
           onDetection({
             classId: this.classIds[smoothed.classIndex],
-            className: '',   // filled in by hook from store
+            className: '',          // filled in by useInference from store
             confidence: smoothed.confidence,
             timestamp: Date.now(),
-            isAboveThreshold: true,   // threshold checked in hook
+            isAboveThreshold: true, // threshold check done in useInference
+            allProbabilities: probs,
+            cropMethod: cropResult.cropInfo.method,
           })
         }
 
-        // FPS
+        // FPS counter
         this.frameCount++
         const now = Date.now()
         if (now - this.lastFpsTime >= 1000) {
@@ -85,8 +141,11 @@ export class InferenceEngine {
           this.frameCount = 0
           this.lastFpsTime = now
         }
-      } catch {
-        // ignore individual frame errors
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error('[InferenceEngine]', msg)
+        onError?.(msg)
+        // Continue loop — don't stop on a single frame error
       }
 
       this.rafId = requestAnimationFrame(loop)
@@ -109,5 +168,5 @@ export class InferenceEngine {
   }
 }
 
-// Singleton
+// Singleton used by useInference
 export const inferenceEngine = new InferenceEngine()

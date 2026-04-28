@@ -11,7 +11,7 @@ import { Card } from '@/components/ui/Card'
 
 export default function InferencePage() {
   const navigate = useNavigate()
-  const { modelStatus, classes } = useAppStore()
+  const { modelStatus, classes, modelClassIds } = useAppStore()
   const camera = useCamera()
   const { inferenceState, start, stop } = useInference(camera.videoRef)
 
@@ -47,10 +47,11 @@ export default function InferencePage() {
 
   const det = inferenceState.currentDetection
   const activeCls = det ? classes.find((c) => c.id === det.classId) : null
+  const isRunning = inferenceState.status === 'running'
 
   return (
     <div className="p-4 sm:p-6 max-w-6xl mx-auto">
-      {/* Header — stacks on mobile */}
+      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
         <div>
           <h1 className="text-lg sm:text-xl font-bold text-gray-100">Reconocimiento en vivo</h1>
@@ -61,7 +62,14 @@ export default function InferencePage() {
         <InferenceControls inferenceState={inferenceState} onStart={start} onStop={stop} />
       </div>
 
-      {/* Main layout */}
+      {/* Engine error banner */}
+      {inferenceState.error && (
+        <div className="mb-4 flex items-start gap-2 px-3 py-2.5 rounded-xl bg-red-950/40 border border-red-800/30">
+          <span className="text-red-400 flex-shrink-0 mt-px text-sm">✕</span>
+          <p className="text-xs text-red-400 font-mono break-all">{inferenceState.error}</p>
+        </div>
+      )}
+
       <div className="flex flex-col lg:grid lg:grid-cols-3 gap-4">
         {/* Camera */}
         <div className="lg:col-span-2">
@@ -73,10 +81,10 @@ export default function InferencePage() {
               onFlip={camera.flip}
               className="w-full aspect-[4/3] sm:aspect-video"
             />
-            {inferenceState.status === 'running' && <DetectionOverlay />}
+            {isRunning && <DetectionOverlay />}
           </div>
 
-          {inferenceState.status !== 'running' && camera.state.isActive && (
+          {!isRunning && camera.state.isActive && (
             <div className="mt-3 p-3 rounded-xl border border-dashed border-gray-700 flex flex-col sm:flex-row items-center justify-center gap-3">
               <span className="text-sm text-gray-500 text-center">
                 Cámara activa — presiona Iniciar para reconocer
@@ -95,80 +103,127 @@ export default function InferencePage() {
             <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
               Detección activa
             </h3>
+
             {det && activeCls ? (
               <div className="space-y-3">
+                {/* Winner */}
                 <div className="flex items-center gap-3">
                   <div
-                    className="w-10 h-10 rounded-xl flex items-center justify-center text-lg font-bold flex-shrink-0"
+                    className={[
+                      'w-10 h-10 rounded-xl flex items-center justify-center text-lg font-bold flex-shrink-0',
+                      det.isAboveThreshold ? 'opacity-100' : 'opacity-40',
+                    ].join(' ')}
                     style={{ backgroundColor: activeCls.color + '22', color: activeCls.color }}
                   >
                     {det.className[0]?.toUpperCase()}
                   </div>
-                  <div className="min-w-0">
-                    <div className="font-semibold text-gray-100 truncate">{det.className}</div>
-                    <div className="text-xs text-gray-500">
-                      Confianza: {Math.round(det.confidence * 100)}%
+                  <div className="min-w-0 flex-1">
+                    <div className={['font-semibold truncate', det.isAboveThreshold ? 'text-gray-100' : 'text-gray-500'].join(' ')}>
+                      {det.isAboveThreshold ? det.className : `Posible: ${det.className}`}
+                    </div>
+                    <div className="text-xs text-gray-500 flex items-center gap-2">
+                      <span>{Math.round(det.confidence * 100)}% confianza</span>
+                      {!det.isAboveThreshold && (
+                        <span className="text-yellow-600">
+                          (umbral: {Math.round((activeCls.confidenceThreshold ?? 0.7) * 100)}%)
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>
-                <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
-                  <div
-                    className="h-full rounded-full transition-all duration-200"
-                    style={{
-                      width: `${Math.round(det.confidence * 100)}%`,
-                      backgroundColor: activeCls.color,
-                    }}
-                  />
+
+                {/* Confidence bar for winning class */}
+                <div className="space-y-0.5">
+                  <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all duration-200"
+                      style={{
+                        width: `${Math.round(det.confidence * 100)}%`,
+                        backgroundColor: det.isAboveThreshold ? activeCls.color : activeCls.color + '55',
+                      }}
+                    />
+                  </div>
+                  {/* Threshold marker */}
+                  <div className="relative h-1">
+                    <div
+                      className="absolute top-0 w-px h-2 bg-yellow-600/60"
+                      style={{ left: `${Math.round(activeCls.confidenceThreshold * 100)}%` }}
+                      title="Umbral de confianza"
+                    />
+                  </div>
                 </div>
+
+                {/* Crop method badge */}
+                {det.cropMethod && (
+                  <div className="text-[10px] text-gray-600">
+                    Recorte: {det.cropMethod === 'cocoSsd' ? 'objeto detectado' : det.cropMethod === 'saliency' ? 'saliencia' : 'central'}
+                  </div>
+                )}
               </div>
             ) : (
               <div className="text-center py-4 text-gray-600">
                 <div className="text-2xl mb-1">◎</div>
                 <p className="text-xs">
-                  {inferenceState.status === 'running' ? 'Buscando objetos...' : 'Inactivo'}
+                  {isRunning ? 'Buscando objetos…' : 'Inactivo'}
                 </p>
               </div>
             )}
           </Card>
 
-          {/* Classes list — collapsible on mobile */}
-          <Card>
-            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
-              Clases del modelo
-            </h3>
-            <div className="grid grid-cols-2 sm:grid-cols-1 gap-1">
-              {classes.map((cls) => {
-                const isActive = inferenceState.currentDetection?.classId === cls.id
-                return (
-                  <div
-                    key={cls.id}
-                    className={[
-                      'flex items-center gap-2 px-2 py-1.5 rounded-lg transition-colors',
-                      isActive ? 'bg-white/5' : '',
-                    ].join(' ')}
-                  >
-                    <span
-                      className="w-2 h-2 rounded-full flex-shrink-0"
-                      style={{ backgroundColor: isActive ? cls.color : cls.color + '55' }}
-                    />
-                    <span
-                      className={[
-                        'text-sm truncate',
-                        isActive ? 'text-gray-100 font-medium' : 'text-gray-500',
-                      ].join(' ')}
-                    >
-                      {cls.name}
-                    </span>
-                    {isActive && (
-                      <span className="ml-auto text-xs font-mono flex-shrink-0" style={{ color: cls.color }}>
-                        {Math.round((inferenceState.currentDetection?.confidence ?? 0) * 100)}%
-                      </span>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          </Card>
+          {/* All-class probabilities panel — always visible when running */}
+          {isRunning && (
+            <Card>
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
+                Clases del modelo
+              </h3>
+              <div className="space-y-2">
+                {modelClassIds.map((classId, idx) => {
+                  const cls = classes.find((c) => c.id === classId)
+                  if (!cls) return null
+                  const prob = det?.allProbabilities?.[idx] ?? null
+                  const isWinner = det?.classId === classId
+                  const isAbove = isWinner && det?.isAboveThreshold
+
+                  return (
+                    <div key={classId} className="space-y-0.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span
+                            className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                            style={{ backgroundColor: isWinner ? cls.color : cls.color + '55' }}
+                          />
+                          <span className={['text-xs truncate', isWinner ? 'text-gray-200 font-medium' : 'text-gray-500'].join(' ')}>
+                            {cls.name}
+                          </span>
+                        </div>
+                        <span className={['text-xs font-mono flex-shrink-0', isAbove ? 'text-green-400' : isWinner ? 'text-yellow-500' : 'text-gray-600'].join(' ')}>
+                          {prob !== null ? `${Math.round(prob * 100)}%` : '—'}
+                        </span>
+                      </div>
+                      {prob !== null && (
+                        <div className="h-1 bg-gray-800 rounded-full overflow-hidden">
+                          <div
+                            className="h-full rounded-full transition-all duration-300"
+                            style={{
+                              width: `${Math.round(prob * 100)}%`,
+                              backgroundColor: isAbove ? cls.color : isWinner ? cls.color + '88' : cls.color + '33',
+                            }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+
+                {/* FPS indicator */}
+                {inferenceState.fps > 0 && (
+                  <p className="text-[10px] text-gray-700 pt-1 text-right font-mono">
+                    {inferenceState.fps} fps
+                  </p>
+                )}
+              </div>
+            </Card>
+          )}
 
           <Button
             variant="ghost"
