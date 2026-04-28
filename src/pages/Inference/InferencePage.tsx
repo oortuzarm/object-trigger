@@ -45,13 +45,20 @@ export default function InferencePage() {
     )
   }
 
-  const det = inferenceState.currentDetection        // confirmed stable detection
-  const debug = inferenceState.debugPrediction       // live best-guess for debug panel
+  const det = inferenceState.currentDetection     // confirmed stable
+  const debug = inferenceState.debugPrediction    // live frame — only set when COCO-SSD sees object
   const activeCls = det ? classes.find((c) => c.id === det.classId) : null
   const debugCls = debug ? classes.find((c) => c.id === debug.classId) : null
   const isRunning = inferenceState.status === 'running'
 
   const streakPct = debug ? Math.min(100, (debug.streakFrames / debug.requiredFrames) * 100) : 0
+
+  // Top-3 probabilities sorted descending for debug panel
+  const top3 = debug?.allProbabilities
+    ? [...modelClassIds.map((id, idx) => ({ id, idx, prob: debug.allProbabilities![idx] ?? 0 }))]
+        .sort((a, b) => b.prob - a.prob)
+        .slice(0, 3)
+    : []
 
   return (
     <div className="p-4 sm:p-6 max-w-6xl mx-auto">
@@ -102,7 +109,8 @@ export default function InferencePage() {
 
         {/* Side panel */}
         <div className="space-y-3">
-          {/* ── Confirmed detection ──────────────────────────────────────── */}
+
+          {/* ── State: confirmed detection ─────────────────────────────── */}
           <Card>
             <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
               Detección activa
@@ -134,123 +142,149 @@ export default function InferencePage() {
                   />
                 </div>
 
-                {det.cropMethod && (
-                  <div className="text-[10px] text-gray-600">
-                    Recorte: {det.cropMethod === 'cocoSsd' ? 'objeto detectado' : det.cropMethod === 'saliency' ? 'saliencia' : 'central'}
+                {det.detectionLabel && (
+                  <div className="text-[10px] text-gray-600 font-mono">
+                    detector: {det.detectionLabel} ({Math.round((det.detectionScore ?? 0) * 100)}%)
                   </div>
                 )}
               </div>
-            ) : isRunning ? (
-              /* 🔍 Searching */
+
+            ) : isRunning && debug ? (
+              /* 🔍 COCO-SSD found object — building streak */
               <div className="space-y-3">
-                <div className="flex items-center gap-2 text-gray-500">
-                  <svg className="w-4 h-4 animate-spin flex-shrink-0" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
-                  </svg>
-                  <span className="text-sm">
-                    {debug && debugCls
-                      ? `Candidato: ${debugCls.name} (${Math.round(debug.confidence * 100)}%)`
-                      : 'Buscando objeto…'}
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse flex-shrink-0" />
+                  <span className="text-sm text-gray-300">
+                    {debugCls ? `Candidato: ${debugCls.name} (${Math.round(debug.confidence * 100)}%)` : 'Analizando…'}
                   </span>
                 </div>
 
                 {/* Streak progress */}
-                {debug && debug.streakFrames > 0 && (
-                  <div className="space-y-1">
-                    <div className="flex justify-between text-[10px] text-gray-600">
-                      <span>Estabilidad</span>
-                      <span>{debug.streakFrames}/{debug.requiredFrames} frames</span>
-                    </div>
-                    <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all duration-200 bg-yellow-600"
-                        style={{ width: `${streakPct}%` }}
-                      />
-                    </div>
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[10px] text-gray-600">
+                    <span>Estabilidad temporal</span>
+                    <span>{debug.streakFrames}/{debug.requiredFrames} frames</span>
                   </div>
-                )}
+                  <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all duration-150 bg-yellow-600"
+                      style={{ width: `${streakPct}%` }}
+                    />
+                  </div>
+                </div>
 
-                {debug && debugCls && (
-                  <div className="text-[10px] text-gray-600">
-                    Umbral requerido: {Math.round((debugCls.confidenceThreshold ?? 0.75) * 100)}%
-                    {debug.confidence < (debugCls.confidenceThreshold ?? 0.75) && (
-                      <span className="text-yellow-700"> · confianza insuficiente</span>
-                    )}
-                  </div>
-                )}
+                <div className="text-[10px] text-gray-600 font-mono space-y-0.5">
+                  <div>detector: <span className="text-gray-500">{debug.detectionLabel}</span> {Math.round(debug.detectionScore * 100)}%</div>
+                  {debugCls && (
+                    <div>umbral: {Math.round((debugCls.confidenceThreshold ?? 0.75) * 100)}%
+                      {debug.confidence < (debugCls.confidenceThreshold ?? 0.75) && (
+                        <span className="text-yellow-700"> · confianza insuficiente</span>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
+
+            ) : isRunning ? (
+              /* ⬜ Running but no COCO-SSD detection */
+              <div className="flex items-center gap-2 text-gray-600 py-2">
+                <svg className="w-4 h-4 animate-spin flex-shrink-0" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+                </svg>
+                <span className="text-sm">Buscando objeto…</span>
+              </div>
+
             ) : (
               /* ⚪ Idle */
-              <div className="text-center py-4 text-gray-600">
+              <div className="text-center py-4 text-gray-700">
                 <div className="text-2xl mb-1">◎</div>
                 <p className="text-xs">Inactivo</p>
               </div>
             )}
           </Card>
 
-          {/* ── Debug: all-class probabilities ───────────────────────────── */}
+          {/* ── Debug: live probabilities ──────────────────────────────── */}
           {isRunning && (
             <Card>
-              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
-                Probabilidades en tiempo real
-              </h3>
-              <div className="space-y-2">
-                {modelClassIds.map((classId, idx) => {
-                  const cls = classes.find((c) => c.id === classId)
-                  if (!cls) return null
-                  const prob = debug?.allProbabilities?.[idx] ?? null
-                  const isDebugWinner = debug?.classId === classId
-                  const isConfirmed = det?.classId === classId
-
-                  return (
-                    <div key={classId} className="space-y-0.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span
-                            className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-                            style={{ backgroundColor: isDebugWinner ? cls.color : cls.color + '44' }}
-                          />
-                          <span className={[
-                            'text-xs truncate',
-                            isConfirmed ? 'text-green-400 font-medium' : isDebugWinner ? 'text-gray-200 font-medium' : 'text-gray-500',
-                          ].join(' ')}>
-                            {cls.name}
-                            {isConfirmed && ' ✓'}
-                          </span>
-                        </div>
-                        <span className={[
-                          'text-xs font-mono flex-shrink-0',
-                          isConfirmed ? 'text-green-400' : isDebugWinner ? 'text-yellow-500' : 'text-gray-600',
-                        ].join(' ')}>
-                          {prob !== null ? `${Math.round(prob * 100)}%` : '—'}
-                        </span>
-                      </div>
-                      {prob !== null && (
-                        <div className="h-1 bg-gray-800 rounded-full overflow-hidden">
-                          <div
-                            className="h-full rounded-full transition-all duration-300"
-                            style={{
-                              width: `${Math.round(prob * 100)}%`,
-                              backgroundColor: isConfirmed ? cls.color : isDebugWinner ? cls.color + '88' : cls.color + '33',
-                            }}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
-
-                {/* Streak + FPS row */}
-                <div className="flex justify-between text-[10px] text-gray-700 pt-1 font-mono">
-                  {debug && debug.streakFrames > 0 ? (
-                    <span>streak {debug.streakFrames}/{debug.requiredFrames}</span>
-                  ) : (
-                    <span />
-                  )}
-                  {inferenceState.fps > 0 && <span>{inferenceState.fps} fps</span>}
-                </div>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                  Probabilidades
+                </h3>
+                {debug ? (
+                  <span className="text-[10px] font-mono text-yellow-600/80">objeto detectado</span>
+                ) : (
+                  <span className="text-[10px] font-mono text-gray-700">sin objeto</span>
+                )}
               </div>
+
+              {debug ? (
+                <div className="space-y-2">
+                  {/* All classes sorted by probability */}
+                  {[...modelClassIds.map((id, idx) => ({
+                    id, idx, prob: debug.allProbabilities?.[idx] ?? 0,
+                  }))]
+                    .sort((a, b) => b.prob - a.prob)
+                    .map(({ id, prob }, rank) => {
+                      const cls = classes.find((c) => c.id === id)
+                      if (!cls) return null
+                      const isWinner = debug.classId === id
+                      const isConfirmed = det?.classId === id
+                      const isTop3 = rank < 3
+
+                      return (
+                        <div key={id} className="space-y-0.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              {rank === 0 && <span className="text-[9px] text-yellow-600">▲</span>}
+                              <span
+                                className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                                style={{ backgroundColor: isWinner ? cls.color : cls.color + '44' }}
+                              />
+                              <span className={[
+                                'text-xs truncate',
+                                isConfirmed ? 'text-green-400 font-medium'
+                                  : isWinner ? 'text-gray-200 font-medium'
+                                  : isTop3 ? 'text-gray-400'
+                                  : 'text-gray-600',
+                              ].join(' ')}>
+                                {cls.name}
+                                {isConfirmed && ' ✓'}
+                              </span>
+                            </div>
+                            <span className={[
+                              'text-xs font-mono flex-shrink-0',
+                              isConfirmed ? 'text-green-400' : isWinner ? 'text-yellow-500' : 'text-gray-600',
+                            ].join(' ')}>
+                              {Math.round(prob * 100)}%
+                            </span>
+                          </div>
+                          <div className="h-1 bg-gray-800 rounded-full overflow-hidden">
+                            <div
+                              className="h-full rounded-full transition-all duration-200"
+                              style={{
+                                width: `${Math.round(prob * 100)}%`,
+                                backgroundColor: isConfirmed ? cls.color
+                                  : isWinner ? cls.color + '99'
+                                  : cls.color + '33',
+                              }}
+                            />
+                          </div>
+                        </div>
+                      )
+                    })}
+
+                  {/* Footer: streak + fps */}
+                  <div className="flex justify-between text-[10px] text-gray-700 pt-1 font-mono">
+                    <span>streak {debug.streakFrames}/{debug.requiredFrames}</span>
+                    {inferenceState.fps > 0 && <span>{inferenceState.fps} fps</span>}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-xs text-gray-700 py-3 text-center">
+                  El clasificador no corre sin detección previa
+                </div>
+              )}
             </Card>
           )}
 

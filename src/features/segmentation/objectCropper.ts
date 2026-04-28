@@ -24,6 +24,9 @@ export interface CropInfo {
   method: CropMethod
   confidence: number  // 0–1, indicates how certain the crop is
   label?: string      // COCO class name (only set when method === 'cocoSsd')
+  /** Normalized [x, y, w, h] in 0-1 range relative to the source canvas.
+   *  Only present when method === 'cocoSsd'. Used by the UI bbox overlay. */
+  bbox?: [number, number, number, number]
 }
 
 export interface CropResult {
@@ -80,6 +83,8 @@ export async function detectAndCrop(
         const best = predictions.reduce((a, b) => (a.score > b.score ? a : b))
         if (best.score >= 0.4) {
           const [bx, by, bw, bh] = best.bbox
+          const W = srcCanvas.width
+          const H = srcCanvas.height
           const cropped = squareCropCanvas(srcCanvas, bx, by, bw, bh, padding, targetSize)
           return {
             blob: await canvasToBlob(cropped),
@@ -89,6 +94,7 @@ export async function detectAndCrop(
               method: 'cocoSsd',
               confidence: best.score,
               label: best.class,
+              bbox: [bx / W, by / H, bw / W, bh / H],
             },
           }
         }

@@ -9,21 +9,18 @@ export function useInference(videoRef: React.RefObject<HTMLVideoElement>) {
   const { classes, modelClassIds, setInferenceState, inferenceState } = useAppStore()
   const loadedRef = useRef(false)
 
-  /**
-   * Handles every inference frame result.
-   *
-   * Two separate updates per frame:
-   *   debugPrediction — always updated with the best-guess class (for debug panel)
-   *   currentDetection — only set when the streak is stable AND confidence
-   *                      exceeds the per-class threshold; otherwise null.
-   *
-   * This ensures "Detección activa" never shows a class name prematurely.
-   */
   const handleFrame = useCallback(
     (frame: FrameResult) => {
-      const { stable, bestGuess, cropMethod, requiredStreak } = frame
+      const { stable, bestGuess, detection, cropMethod, requiredStreak } = frame
 
-      // ── Debug prediction (always shown in the probabilities panel) ──────
+      // ── No COCO-SSD detection → classifier never ran ──────────────────
+      // Clear both detection and debug so the UI shows "Buscando objeto..."
+      if (!bestGuess || !detection) {
+        setInferenceState({ currentDetection: null, debugPrediction: null })
+        return
+      }
+
+      // ── Debug prediction (COCO-SSD found something, classifier ran) ───
       const bestCls = classes.find((c) => c.id === bestGuess.classId)
       const debugPrediction = bestCls
         ? {
@@ -33,10 +30,13 @@ export function useInference(videoRef: React.RefObject<HTMLVideoElement>) {
             allProbabilities: bestGuess.allProbs,
             streakFrames: bestGuess.streak,
             requiredFrames: requiredStreak,
+            detectionScore: detection.score,
+            detectionLabel: detection.label,
+            detectionBbox: detection.bbox,
           }
         : null
 
-      // ── Confirmed detection (only when stable + above per-class threshold) ─
+      // ── Confirmed detection (streak met + above per-class threshold) ──
       let currentDetection = null
 
       if (stable) {
@@ -52,6 +52,9 @@ export function useInference(videoRef: React.RefObject<HTMLVideoElement>) {
             cropMethod,
             streakFrames: stable.streak,
             requiredFrames: requiredStreak,
+            detectionScore: detection.score,
+            detectionLabel: detection.label,
+            detectionBbox: detection.bbox,
           }
         }
       }
