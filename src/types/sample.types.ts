@@ -1,3 +1,7 @@
+import type { CropInfo } from '@/features/segmentation/objectCropper'
+
+export type { CropInfo }
+
 export type QualityFlag = 'blur' | 'dark' | 'similar' | 'ok'
 
 export interface QualityReport {
@@ -11,10 +15,11 @@ export interface QualityReport {
 export interface TrainingSample {
   id: string
   classId: string
-  blob: Blob
+  blob: Blob             // training image — cropped to the object when detection succeeded
   capturedAt: number
   qualityReport: QualityReport
-  thumbnail?: string  // base64 data URL for display
+  thumbnail?: string     // data URL of the cropped image, for UI display
+  cropInfo?: CropInfo    // how the crop was made; undefined for samples captured before this feature
 }
 
 export interface DatasetStats {

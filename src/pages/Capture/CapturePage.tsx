@@ -7,6 +7,19 @@ import CaptureGuide from '@/components/camera/CaptureGuide'
 import CaptureGrid from './CaptureGrid'
 import { Button } from '@/components/ui/Button'
 import { Spinner } from '@/components/ui/Spinner'
+import type { CropMethod } from '@/features/segmentation/objectCropper'
+
+// Human-readable labels and colors for each crop method
+const CROP_METHOD_LABEL: Record<CropMethod, string> = {
+  cocoSsd:  'Objeto detectado',
+  saliency: 'Región detectada',
+  center:   'Recorte central',
+}
+const CROP_METHOD_COLOR: Record<CropMethod, string> = {
+  cocoSsd:  'bg-green-600/20 text-green-400 border-green-600/30',
+  saliency: 'bg-yellow-600/20 text-yellow-400 border-yellow-600/30',
+  center:   'bg-gray-700/50 text-gray-400 border-gray-700',
+}
 
 export default function CapturePage() {
   const { classId } = useParams<{ classId: string }>()
@@ -14,8 +27,11 @@ export default function CapturePage() {
   const { classes } = useAppStore()
   const cls = classes.find((c) => c.id === classId)
 
-  const { camera, samples, lastQuality, currentHint, capturing, loadSamples, captureOne, removeSample } =
-    useCapture(classId ?? '')
+  const {
+    camera, samples, lastQuality, currentHint, capturing,
+    detectorReady, lastCropInfo,
+    loadSamples, captureOne, removeSample,
+  } = useCapture(classId ?? '')
 
   useEffect(() => {
     if (!classId) return
@@ -47,12 +63,43 @@ export default function CapturePage() {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
         </Link>
-        <div className="min-w-0">
+        <div className="flex-1 min-w-0">
           <h1 className="text-lg sm:text-xl font-bold text-gray-100 flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: cls.color }} />
             <span className="truncate">{cls.name}</span>
           </h1>
           <p className="text-xs text-gray-500">Captura muestras de entrenamiento</p>
+        </div>
+
+        {/* --- Detector status badge --- */}
+        <div className="flex-shrink-0">
+          {!detectorReady ? (
+            <span className="inline-flex items-center gap-1.5 px-2 py-1 text-xs rounded-lg border border-gray-700 text-gray-500">
+              <Spinner size="sm" />
+              Cargando detector…
+            </span>
+          ) : lastCropInfo ? (
+            <span
+              className={[
+                'inline-flex items-center gap-1.5 px-2 py-1 text-xs rounded-lg border',
+                CROP_METHOD_COLOR[lastCropInfo.method],
+              ].join(' ')}
+            >
+              {CROP_METHOD_LABEL[lastCropInfo.method]}
+              <span className="opacity-60">
+                {Math.round(lastCropInfo.confidence * 100)}%
+              </span>
+              {lastCropInfo.label && (
+                <span className="opacity-50 capitalize hidden sm:inline">
+                  · {lastCropInfo.label}
+                </span>
+              )}
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 px-2 py-1 text-xs rounded-lg border border-green-600/30 bg-green-600/10 text-green-500">
+              Detector listo
+            </span>
+          )}
         </div>
       </div>
 
@@ -78,7 +125,7 @@ export default function CapturePage() {
             {capturing ? (
               <>
                 <Spinner size="sm" />
-                <span className="text-sm font-medium text-gray-400">Capturando...</span>
+                <span className="text-sm font-medium text-gray-400">Detectando objeto…</span>
               </>
             ) : (
               <>
@@ -90,11 +137,51 @@ export default function CapturePage() {
               </>
             )}
           </button>
+
+          {/* --- Low-confidence detection warning --- */}
+          {lastCropInfo && lastCropInfo.confidence < 0.2 && !capturing && (
+            <div className="flex items-start gap-2 px-3 py-2.5 rounded-xl bg-yellow-950/30 border border-yellow-800/30">
+              <span className="text-yellow-500 text-sm flex-shrink-0 mt-px">⚠</span>
+              <p className="text-xs text-yellow-600">
+                Objeto no detectado con claridad. Prueba con un fondo más liso, mejor iluminación
+                o acercándote más al objeto.
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Guide sidebar */}
         <div className="space-y-3">
           <CaptureGuide sampleCount={samples.length} currentHint={currentHint} lastQuality={lastQuality} />
+
+          {/* --- Segmentation info card --- */}
+          <div className="rounded-xl border border-gray-800 bg-gray-900/50 p-3 space-y-2">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+              Preprocesamiento
+            </p>
+            <p className="text-xs text-gray-500 leading-relaxed">
+              Cada muestra se recorta automáticamente al objeto principal antes de
+              guardarse. El modelo aprende el objeto, no el fondo.
+            </p>
+            {lastCropInfo && (
+              <div className="flex items-center gap-2 pt-1">
+                <span
+                  className={[
+                    'w-1.5 h-1.5 rounded-full flex-shrink-0',
+                    lastCropInfo.method === 'cocoSsd'
+                      ? 'bg-green-400'
+                      : lastCropInfo.method === 'saliency'
+                      ? 'bg-yellow-400'
+                      : 'bg-gray-600',
+                  ].join(' ')}
+                />
+                <span className="text-xs text-gray-500">
+                  {CROP_METHOD_LABEL[lastCropInfo.method]}
+                  {lastCropInfo.label ? ` · ${lastCropInfo.label}` : ''}
+                </span>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

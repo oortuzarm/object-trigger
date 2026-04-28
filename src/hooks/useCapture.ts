@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { useCamera } from './useCamera'
 import { analyzeQuality } from '@/features/quality/qualityAnalyzer'
 import { saveSample, getSamplesByClass, deleteSample } from '@/features/storage/samplesStore'
@@ -7,6 +7,13 @@ import { useAppStore } from '@/store/appStore'
 import type { TrainingSample, QualityReport } from '@/types/sample.types'
 import { toast } from '@/components/ui/Toast'
 import { generateId } from '@/utils/generateId'
+// --- Object segmentation preprocessing ---
+import {
+  preloadDetector,
+  isDetectorReady,
+  detectAndCrop,
+} from '@/features/segmentation/objectCropper'
+import type { CropInfo } from '@/features/segmentation/objectCropper'
 
 const CAPTURE_HINTS = [
   'Varía el ángulo: fotografía desde arriba o abajo',
@@ -29,7 +36,22 @@ export function useCapture(classId: string) {
   const [lastQuality, setLastQuality] = useState<QualityReport | null>(null)
   const [hintIndex, setHintIndex] = useState(0)
   const [capturing, setCapturing] = useState(false)
+  // --- Segmentation state ---
+  const [detectorReady, setDetectorReady] = useState(isDetectorReady())
+  const [lastCropInfo, setLastCropInfo] = useState<CropInfo | null>(null)
   const lastImageData = useRef<ImageData | undefined>(undefined)
+
+  // Eagerly load COCO-SSD model when capture session starts.
+  // This runs once and populates the singleton so subsequent captures are fast.
+  useEffect(() => {
+    if (isDetectorReady()) return
+    preloadDetector()
+      .then(() => setDetectorReady(true))
+      .catch(() => {
+        // Detection will gracefully fall back to saliency/center crop
+        setDetectorReady(true)
+      })
+  }, [])
 
   const loadSamples = useCallback(async () => {
     const loaded = await getSamplesByClass(classId)
@@ -41,46 +63,49 @@ export function useCapture(classId: string) {
     setCapturing(true)
 
     try {
-      const imageData = camera.captureFrame(224)
-      const blob = await camera.captureBlob(224)
-      if (!imageData || !blob) return
+      // 1. Grab raw frame from camera (224×224 square crop of video)
+      const rawImageData = camera.captureFrame(224)
+      if (!rawImageData) return
 
-      const quality = analyzeQuality(imageData, lastImageData.current)
+      // --- Object segmentation preprocessing ---
+      // detectAndCrop() isolates the main object from the raw frame:
+      //   - COCO-SSD detection → tight bounding-box crop (if confidence ≥ 0.4)
+      //   - Saliency fallback  → gradient-weighted centroid crop
+      //   - Center 65% crop   → last resort when nothing is detected
+      // The resulting blob replaces the raw blob so the training worker learns
+      // the object rather than the full scene context.
+      const cropResult = await detectAndCrop(rawImageData)
+      setLastCropInfo(cropResult.cropInfo)
+
+      // Warn the user when detection confidence is very low
+      if (cropResult.cropInfo.confidence < 0.2) {
+        toast.warning('Objeto no detectado claramente — intenta con fondo más simple')
+      }
+
+      // 2. Quality analysis runs on the CROPPED image, not the raw frame.
+      //    This ensures blur/brightness/diversity checks apply to the object itself.
+      const quality = analyzeQuality(cropResult.imageData, lastImageData.current)
       setLastQuality(quality)
-      lastImageData.current = imageData
-
-      // Generate thumbnail
-      const canvas = document.createElement('canvas')
-      canvas.width = 112
-      canvas.height = 112
-      const ctx = canvas.getContext('2d')!
-      ctx.putImageData(imageData, 0, 0)
-      // Scale down
-      const thumb = document.createElement('canvas')
-      thumb.width = 112
-      thumb.height = 112
-      const tctx = thumb.getContext('2d')!
-      tctx.drawImage(canvas, 0, 0, 224, 224, 0, 0, 112, 112)
-      const thumbnail = thumb.toDataURL('image/jpeg', 0.7)
+      // Track cropped images for diversity comparison between samples
+      lastImageData.current = cropResult.imageData
 
       const sample: TrainingSample = {
         id: generateId(),
         classId,
-        blob,
+        blob: cropResult.blob,        // cropped object, used for training
         capturedAt: Date.now(),
         qualityReport: quality,
-        thumbnail,
+        cropInfo: cropResult.cropInfo,
+        thumbnail: cropResult.thumbnail,
       }
 
       await saveSample(sample)
       setSamples((prev) => [...prev, sample])
 
-      // Update class sample count
       const newCount = samples.length + 1
       await updateSampleCount(classId, newCount)
       if (cls) upsertClass({ ...cls, sampleCount: newCount })
 
-      // Rotate hint every 5 captures
       if (newCount % 5 === 0) {
         setHintIndex((i) => (i + 1) % CAPTURE_HINTS.length)
       }
@@ -111,6 +136,8 @@ export function useCapture(classId: string) {
     lastQuality,
     currentHint,
     capturing,
+    detectorReady,
+    lastCropInfo,
     loadSamples,
     captureOne,
     removeSample,

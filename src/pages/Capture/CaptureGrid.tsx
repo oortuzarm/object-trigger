@@ -28,12 +28,37 @@ export default function CaptureGrid({ samples, onDelete }: CaptureGridProps) {
             <div className="w-full h-full rounded-lg bg-gray-800 border border-gray-700" />
           )}
 
-          {/* Quality dots */}
+          {/* Quality warning dots */}
           {s.qualityReport.flags.includes('blur') && (
-            <div className="absolute top-0.5 left-0.5 w-2.5 h-2.5 bg-yellow-500 rounded-full opacity-90" title="Borrosa" />
+            <div className="absolute top-0.5 left-0.5 w-2 h-2 bg-yellow-500 rounded-full opacity-90" title="Borrosa" />
           )}
           {s.qualityReport.flags.includes('dark') && (
-            <div className="absolute top-0.5 right-0.5 w-2.5 h-2.5 bg-orange-500 rounded-full opacity-90" title="Oscura" />
+            <div className="absolute top-0.5 right-0.5 w-2 h-2 bg-orange-500 rounded-full opacity-90" title="Oscura" />
+          )}
+
+          {/* --- Crop method indicator (bottom-left corner) ---
+               Green  = COCO-SSD object detected (best quality)
+               Yellow = Saliency-based crop (good)
+               Gray   = Center crop fallback (no detection)
+               None   = Legacy sample captured before this feature */}
+          {s.cropInfo && (
+            <div
+              className={[
+                'absolute bottom-0.5 left-0.5 w-2 h-2 rounded-full opacity-80',
+                s.cropInfo.method === 'cocoSsd'
+                  ? 'bg-green-400'
+                  : s.cropInfo.method === 'saliency'
+                  ? 'bg-yellow-400'
+                  : 'bg-gray-500',
+              ].join(' ')}
+              title={
+                s.cropInfo.method === 'cocoSsd'
+                  ? `Objeto detectado: ${s.cropInfo.label ?? ''} (${Math.round(s.cropInfo.confidence * 100)}%)`
+                  : s.cropInfo.method === 'saliency'
+                  ? 'Región saliente detectada'
+                  : 'Recorte central (sin detección)'
+              }
+            />
           )}
 
           {/* Delete on hover/tap */}
