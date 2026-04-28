@@ -7,12 +7,13 @@ import {
 } from '@/features/storage/classesStore'
 import { deleteSamplesByClass } from '@/features/storage/samplesStore'
 import { deleteAssetBlob } from '@/features/storage/assetsStore'
+import { deleteModel } from '@/features/storage/modelsStore'
 import type { ObjectClass } from '@/types/class.types'
 import { createObjectClass, CLASS_COLORS } from '@/types/class.types'
 import { toast } from '@/components/ui/Toast'
 
 export function useClasses() {
-  const { classes, setClasses, upsertClass, removeClass } = useAppStore()
+  const { classes, setClasses, upsertClass, removeClass, modelStatus, modelClassIds } = useAppStore()
 
   const refresh = useCallback(async () => {
     const all = await getAllClasses()
@@ -41,17 +42,26 @@ export function useClasses() {
   const deleteClass = useCallback(
     async (id: string) => {
       const cls = classes.find((c) => c.id === id)
-      // delete asset blob if exists
       if (cls?.asset && 'blobId' in (cls.asset.config as unknown as Record<string, unknown>)) {
         const blobId = (cls.asset.config as unknown as { blobId: string }).blobId
         await deleteAssetBlob(blobId)
       }
       await deleteSamplesByClass(id)
       await deleteClassDB(id)
+
+      // If the deleted class was part of the trained model (or it's the last class),
+      // the IDB model is now stale — delete it. The store's removeClass handles
+      // setting modelStatus to 'outdated' or 'not_trained' atomically.
+      const isLastClass = classes.length === 1
+      const wasInModel = modelStatus !== 'not_trained' && (modelClassIds.includes(id) || isLastClass)
+      if (wasInModel) {
+        await deleteModel()
+      }
+
       removeClass(id)
       toast.success(`Clase "${cls?.name}" eliminada`)
     },
-    [classes, removeClass]
+    [classes, removeClass, modelStatus, modelClassIds]
   )
 
   const getColorForIndex = (index: number) =>

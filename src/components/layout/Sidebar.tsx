@@ -9,7 +9,7 @@ interface NavItem {
 }
 
 export default function Sidebar() {
-  const { hasTrainedModel, classes } = useAppStore()
+  const { modelStatus, classes } = useAppStore()
   const totalSamples = classes.reduce((acc, c) => acc + c.sampleCount, 0)
 
   const navItems: NavItem[] = [
@@ -75,11 +75,11 @@ export default function Sidebar() {
             <div
               className={[
                 'w-1.5 h-1.5 rounded-full flex-shrink-0',
-                hasTrainedModel ? 'bg-green-400' : 'bg-gray-600',
+                modelStatus === 'ready' ? 'bg-green-400' : modelStatus === 'outdated' ? 'bg-yellow-400' : 'bg-gray-600',
               ].join(' ')}
             />
             <span className="text-xs text-gray-500">
-              {hasTrainedModel ? 'Modelo listo' : 'Sin modelo'}
+              {modelStatus === 'ready' ? 'Modelo listo' : modelStatus === 'outdated' ? 'Reentrenar' : 'Sin modelo'}
             </span>
           </div>
         </div>

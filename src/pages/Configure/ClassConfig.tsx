@@ -20,7 +20,8 @@ export default function ClassConfig({ cls }: ClassConfigProps) {
     <Card className="transition-all duration-200">
       {/* Header row */}
       <button
-        className="w-full flex items-center gap-3 text-left"
+        type="button"
+        className="w-full flex items-center gap-3 text-left touch-manipulation"
         onClick={() => setExpanded((v) => !v)}
       >
         <div
@@ -29,7 +30,7 @@ export default function ClassConfig({ cls }: ClassConfigProps) {
         >
           {cls.name[0].toUpperCase()}
         </div>
-        <div className="flex-1">
+        <div className="flex-1 min-w-0">
           <div className="font-semibold text-gray-200 text-sm">{cls.name}</div>
           <div className="text-xs text-gray-500">
             {cls.asset ? `Asset: ${cls.asset.type}` : 'Sin asset'} · Umbral:{' '}
@@ -37,7 +38,7 @@ export default function ClassConfig({ cls }: ClassConfigProps) {
           </div>
         </div>
         <svg
-          className={['w-4 h-4 text-gray-500 transition-transform', expanded ? 'rotate-180' : ''].join(' ')}
+          className={['w-4 h-4 text-gray-500 transition-transform flex-shrink-0', expanded ? 'rotate-180' : ''].join(' ')}
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
@@ -113,25 +114,28 @@ function Toggle({
   checked: boolean
   onChange: (v: boolean) => void
 }) {
+  // div instead of label: avoids the iOS double-fire bug where a <label>
+  // wrapping a <button> triggers the button click twice on touch.
   return (
-    <label className="flex items-center justify-between cursor-pointer">
-      <span className="text-sm text-gray-300">{label}</span>
+    <div className="flex items-center justify-between py-0.5">
+      <span className="text-sm text-gray-300 flex-1">{label}</span>
       <button
+        type="button"
         role="switch"
         aria-checked={checked}
         onClick={() => onChange(!checked)}
         className={[
-          'relative w-10 h-5 rounded-full transition-colors duration-200',
+          'relative w-11 h-6 rounded-full transition-colors duration-200 flex-shrink-0 touch-manipulation',
           checked ? 'bg-brand-600' : 'bg-gray-700',
         ].join(' ')}
       >
         <span
           className={[
-            'absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200',
-            checked ? 'translate-x-5' : 'translate-x-0.5',
+            'absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200',
+            checked ? 'translate-x-6' : 'translate-x-1',
           ].join(' ')}
         />
       </button>
-    </label>
+    </div>
   )
 }

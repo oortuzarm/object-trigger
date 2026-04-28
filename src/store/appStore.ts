@@ -3,6 +3,8 @@ import type { ObjectClass } from '@/types/class.types'
 import type { TrainingProgress } from '@/types/training.types'
 import type { InferenceState } from '@/types/inference.types'
 
+export type ModelStatus = 'not_trained' | 'ready' | 'outdated'
+
 interface AppState {
   // Classes
   classes: ObjectClass[]
@@ -11,7 +13,7 @@ interface AppState {
   removeClass: (id: string) => void
 
   // Model state
-  hasTrainedModel: boolean
+  modelStatus: ModelStatus
   modelClassIds: string[]
   setModelReady: (classIds: string[]) => void
   clearModel: () => void
@@ -42,13 +44,28 @@ export const useAppStore = create<AppState>((set) => ({
       }
       return { classes: [...state.classes, cls] }
     }),
+  // Atomically removes the class and updates model validity.
+  // - Deleting the last class → not_trained (no classes means no valid model)
+  // - Deleting a class that was part of the trained model → outdated
   removeClass: (id) =>
-    set((state) => ({ classes: state.classes.filter((c) => c.id !== id) })),
+    set((state) => {
+      const newClasses = state.classes.filter((c) => c.id !== id)
+      let { modelStatus, modelClassIds } = state
 
-  hasTrainedModel: false,
+      if (newClasses.length === 0) {
+        modelStatus = 'not_trained'
+        modelClassIds = []
+      } else if (state.modelStatus === 'ready' && state.modelClassIds.includes(id)) {
+        modelStatus = 'outdated'
+      }
+
+      return { classes: newClasses, modelStatus, modelClassIds }
+    }),
+
+  modelStatus: 'not_trained',
   modelClassIds: [],
-  setModelReady: (classIds) => set({ hasTrainedModel: true, modelClassIds: classIds }),
-  clearModel: () => set({ hasTrainedModel: false, modelClassIds: [] }),
+  setModelReady: (classIds) => set({ modelStatus: 'ready', modelClassIds: classIds }),
+  clearModel: () => set({ modelStatus: 'not_trained', modelClassIds: [] }),
 
   trainingProgress: null,
   setTrainingProgress: (progress) => set({ trainingProgress: progress }),

@@ -57,9 +57,11 @@ export const CLASS_COLORS = [
   '#06b6d4', '#3b82f6',
 ]
 
+import { generateId } from '@/utils/generateId'
+
 export function createObjectClass(name: string, color?: string): ObjectClass {
   return {
-    id: crypto.randomUUID(),
+    id: generateId(),
     name,
     color: color ?? CLASS_COLORS[Math.floor(Math.random() * CLASS_COLORS.length)],
     confidenceThreshold: 0.7,

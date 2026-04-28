@@ -11,7 +11,7 @@ import { Card } from '@/components/ui/Card'
 
 export default function InferencePage() {
   const navigate = useNavigate()
-  const { hasTrainedModel, classes } = useAppStore()
+  const { modelStatus, classes } = useAppStore()
   const camera = useCamera()
   const { inferenceState, start, stop } = useInference(camera.videoRef)
 
@@ -23,7 +23,7 @@ export default function InferencePage() {
     }
   }, [])
 
-  if (!hasTrainedModel) {
+  if (modelStatus !== 'ready') {
     return (
       <div className="p-4 sm:p-6 max-w-lg mx-auto text-center pt-16 sm:pt-20">
         <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-gray-800 flex items-center justify-center mx-auto mb-4 text-3xl">

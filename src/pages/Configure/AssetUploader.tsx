@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
+import { toast } from '@/components/ui/Toast'
 import { uploadAsset, removeAsset, ASSET_LABELS } from '@/features/assets/assetManager'
 import type { AssetType, ClassAsset, VideoAssetConfig, AudioAssetConfig, Model3DAssetConfig, UrlAssetConfig } from '@/types/class.types'
 
@@ -47,17 +48,22 @@ export default function AssetUploader({ currentAsset, onAssetChange }: AssetUplo
       else config = { blobId }
 
       onAssetChange({ type: selectedType, config })
+      toast.success(`${ASSET_LABELS[selectedType]} subido correctamente`)
+    } catch {
+      toast.error('Error al subir el archivo')
     } finally {
       setUploading(false)
     }
   }
 
-  const handleUrlSave = () => {
+  const handleUrlSave = (e?: React.FormEvent) => {
+    e?.preventDefault()
     if (!urlValue.trim()) return
     onAssetChange({
       type: 'url',
       config: { url: urlValue.trim(), label: urlLabel.trim() || 'Ver más' },
     })
+    toast.success('URL guardada')
   }
 
   const handleRemove = async () => {
@@ -65,6 +71,7 @@ export default function AssetUploader({ currentAsset, onAssetChange }: AssetUplo
       await removeAsset((currentAsset.config as unknown as { blobId: string }).blobId)
     }
     onAssetChange(null)
+    toast.success('Asset eliminado')
   }
 
   return (
@@ -76,9 +83,10 @@ export default function AssetUploader({ currentAsset, onAssetChange }: AssetUplo
           {ASSET_TYPES.map((t) => (
             <button
               key={t}
+              type="button"
               onClick={() => setSelectedType(t)}
               className={[
-                'px-3 py-1.5 text-xs rounded-lg border transition-all',
+                'px-3 py-1.5 text-xs rounded-lg border transition-all touch-manipulation',
                 selectedType === t
                   ? 'border-brand-500 bg-brand-600/20 text-brand-300'
                   : 'border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600',
@@ -97,17 +105,18 @@ export default function AssetUploader({ currentAsset, onAssetChange }: AssetUplo
             {ASSET_LABELS[currentAsset.type]} configurado
           </Badge>
           <button
+            type="button"
             onClick={handleRemove}
-            className="text-xs text-red-500 hover:text-red-400 transition-colors"
+            className="text-xs text-red-500 hover:text-red-400 transition-colors touch-manipulation py-1 px-2"
           >
             Eliminar
           </button>
         </div>
       )}
 
-      {/* URL type */}
+      {/* URL type — wrapped in form for Enter key support on mobile */}
       {selectedType === 'url' ? (
-        <div className="space-y-3">
+        <form onSubmit={handleUrlSave} className="space-y-3">
           <div>
             <label className="block text-xs text-gray-400 mb-1.5">URL</label>
             <input
@@ -115,7 +124,8 @@ export default function AssetUploader({ currentAsset, onAssetChange }: AssetUplo
               value={urlValue}
               onChange={(e) => setUrlValue(e.target.value)}
               placeholder="https://..."
-              className="w-full bg-gray-800 border border-gray-700 rounded-xl px-3 py-2 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-brand-500"
+              enterKeyHint="next"
+              className="w-full bg-gray-800 border border-gray-700 rounded-xl px-3 py-2.5 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-brand-500"
             />
           </div>
           <div>
@@ -125,13 +135,14 @@ export default function AssetUploader({ currentAsset, onAssetChange }: AssetUplo
               value={urlLabel}
               onChange={(e) => setUrlLabel(e.target.value)}
               placeholder="Ver más"
-              className="w-full bg-gray-800 border border-gray-700 rounded-xl px-3 py-2 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-brand-500"
+              enterKeyHint="done"
+              className="w-full bg-gray-800 border border-gray-700 rounded-xl px-3 py-2.5 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-brand-500"
             />
           </div>
-          <Button size="sm" onClick={handleUrlSave} disabled={!urlValue.trim()}>
+          <Button type="submit" size="sm" disabled={!urlValue.trim()}>
             Guardar URL
           </Button>
-        </div>
+        </form>
       ) : (
         <div className="space-y-3">
           {/* Options per type */}
@@ -143,7 +154,7 @@ export default function AssetUploader({ currentAsset, onAssetChange }: AssetUplo
                     type="checkbox"
                     checked={videoOpts[opt]}
                     onChange={(e) => setVideoOpts((v) => ({ ...v, [opt]: e.target.checked }))}
-                    className="accent-brand-500"
+                    className="accent-brand-500 w-4 h-4"
                   />
                   {opt.charAt(0).toUpperCase() + opt.slice(1)}
                 </label>
@@ -156,7 +167,7 @@ export default function AssetUploader({ currentAsset, onAssetChange }: AssetUplo
                 type="checkbox"
                 checked={audioAutoplay}
                 onChange={(e) => setAudioAutoplay(e.target.checked)}
-                className="accent-brand-500"
+                className="accent-brand-500 w-4 h-4"
               />
               Autoplay al detectar
             </label>
@@ -167,13 +178,12 @@ export default function AssetUploader({ currentAsset, onAssetChange }: AssetUplo
                 type="checkbox"
                 checked={autoRotate}
                 onChange={(e) => setAutoRotate(e.target.checked)}
-                className="accent-brand-500"
+                className="accent-brand-500 w-4 h-4"
               />
               Auto-rotación
             </label>
           )}
 
-          {/* File input */}
           <input
             ref={fileRef}
             type="file"
@@ -185,6 +195,7 @@ export default function AssetUploader({ currentAsset, onAssetChange }: AssetUplo
             }}
           />
           <Button
+            type="button"
             variant="secondary"
             size="sm"
             loading={uploading}

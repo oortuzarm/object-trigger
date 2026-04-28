@@ -6,11 +6,15 @@ import { Badge } from '@/components/ui/Badge'
 
 export default function Dashboard() {
   const navigate = useNavigate()
-  const { classes, hasTrainedModel, modelClassIds } = useAppStore()
+  const { classes, modelStatus, modelClassIds } = useAppStore()
 
   const totalSamples = classes.reduce((acc, c) => acc + c.sampleCount, 0)
   const classesWithSamples = classes.filter((c) => c.sampleCount >= 5)
   const readyToTrain = classesWithSamples.length >= 2
+  const modelReady = modelStatus === 'ready'
+
+  // Trained classes count is derived from current state, never from a cached value.
+  const trainedClassesCount = modelReady ? modelClassIds.length : 0
 
   const steps = [
     {
@@ -41,9 +45,9 @@ export default function Dashboard() {
       number: 4,
       title: 'Entrena el modelo',
       desc: 'Entrenamiento local en tu navegador',
-      done: hasTrainedModel,
+      done: modelReady,
       path: '/training',
-      cta: hasTrainedModel ? 'Re-entrenar' : 'Entrenar ahora',
+      cta: modelStatus !== 'not_trained' ? 'Re-entrenar' : 'Entrenar ahora',
     },
     {
       number: 5,
@@ -71,12 +75,41 @@ export default function Dashboard() {
         <StatCard label="Muestras" value={totalSamples} icon="⊙" />
         <StatCard
           label="Modelo"
-          value={hasTrainedModel ? 'Listo' : 'Pendiente'}
+          value={modelStatus === 'ready' ? 'Listo' : modelStatus === 'outdated' ? 'Desactualizado' : 'Pendiente'}
           icon="⚡"
-          valueClass={hasTrainedModel ? 'text-green-400' : 'text-gray-500'}
+          valueClass={
+            modelStatus === 'ready'
+              ? 'text-green-400'
+              : modelStatus === 'outdated'
+              ? 'text-yellow-400'
+              : 'text-gray-500'
+          }
         />
-        <StatCard label="Entrenadas" value={modelClassIds.length} icon="◎" />
+        <StatCard label="Entrenadas" value={trainedClassesCount} icon="◎" />
       </div>
+
+      {/* Outdated model banner */}
+      {modelStatus === 'outdated' && (
+        <Card className="mb-6 border-yellow-800/30 bg-yellow-950/20">
+          <div className="flex items-start gap-3">
+            <span className="text-yellow-400 text-base flex-shrink-0 mt-0.5">⚠</span>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-yellow-300 mb-0.5">Modelo desactualizado</p>
+              <p className="text-xs text-yellow-600">
+                El modelo debe reentrenarse porque cambiaste las clases.
+              </p>
+            </div>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => navigate('/training')}
+              className="flex-shrink-0"
+            >
+              Reentrenar
+            </Button>
+          </div>
+        </Card>
+      )}
 
       {/* Flow steps */}
       <div className="mb-6">
@@ -95,14 +128,14 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Quick actions */}
-      {hasTrainedModel && (
+      {/* Ready model CTA — only shown when model is valid */}
+      {modelReady && (
         <Card className="bg-gradient-to-r from-brand-950/60 to-gray-900 border-brand-800/30">
           <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
             <div>
               <h3 className="font-semibold text-gray-100 mb-1">Modelo entrenado</h3>
               <p className="text-sm text-gray-400">
-                {modelClassIds.length} clase{modelClassIds.length !== 1 ? 's' : ''} listas
+                {trainedClassesCount} clase{trainedClassesCount !== 1 ? 's' : ''} listas
               </p>
             </div>
             <Button onClick={() => navigate('/inference')} className="w-full sm:w-auto">
@@ -112,7 +145,23 @@ export default function Dashboard() {
         </Card>
       )}
 
-      {!hasTrainedModel && readyToTrain && (
+      {/* No classes at all — primary CTA */}
+      {classes.length === 0 && (
+        <Card className="bg-gradient-to-r from-gray-900 to-gray-950 border-gray-800">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
+            <div>
+              <h3 className="font-semibold text-gray-100 mb-1">Empieza aquí</h3>
+              <p className="text-sm text-gray-400">Crea tus primeras clases para comenzar.</p>
+            </div>
+            <Button onClick={() => navigate('/classes')} className="w-full sm:w-auto">
+              Crear primera clase
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {/* Ready to train CTA — only when model isn't valid and has enough data */}
+      {!modelReady && modelStatus !== 'outdated' && readyToTrain && (
         <Card className="bg-gradient-to-r from-yellow-950/40 to-gray-900 border-yellow-800/20">
           <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
             <div>
@@ -195,7 +244,6 @@ function StepCard({
           {step.done ? 'Listo' : step.cta}
         </Badge>
       )}
-      {/* Arrow on mobile instead of badge */}
       {isCurrent && (
         <svg className="sm:hidden w-4 h-4 text-brand-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />

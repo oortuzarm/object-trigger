@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/Badge'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { toast } from '@/components/ui/Toast'
 import type { Project } from '@/types/project.types'
+import { generateId } from '@/utils/generateId'
 
 export default function ProjectsPage() {
   const { classes, activeProjectName, setActiveProjectName } = useAppStore()
@@ -18,12 +19,13 @@ export default function ProjectsPage() {
 
   useEffect(() => { load() }, [])
 
-  const handleSave = async () => {
+  const handleSave = async (e?: React.FormEvent) => {
+    e?.preventDefault()
     if (!projectName.trim()) return
     setSaving(true)
     try {
       const project: Project = {
-        id: crypto.randomUUID(),
+        id: generateId(),
         name: projectName.trim(),
         classIds: classes.map((c) => c.id),
         classCount: classes.length,
@@ -36,15 +38,21 @@ export default function ProjectsPage() {
       setActiveProjectName(projectName.trim())
       await load()
       toast.success('Proyecto guardado')
+    } catch {
+      toast.error('Error al guardar el proyecto')
     } finally {
       setSaving(false)
     }
   }
 
   const handleDelete = async (id: string) => {
-    await deleteProject(id)
-    await load()
-    toast.success('Proyecto eliminado')
+    try {
+      await deleteProject(id)
+      await load()
+      toast.success('Proyecto eliminado')
+    } catch {
+      toast.error('Error al eliminar el proyecto')
+    }
   }
 
   const formatDate = (ts: number) =>
@@ -57,21 +65,22 @@ export default function ProjectsPage() {
         <p className="text-xs sm:text-sm text-gray-500 mt-0.5">Guarda snapshots de tu proyecto actual</p>
       </div>
 
-      {/* Save current */}
+      {/* Wrapped in form so Enter/Done on mobile keyboard submits */}
       <Card className="mb-5">
         <h2 className="text-sm font-semibold text-gray-300 mb-3">Guardar proyecto actual</h2>
-        <div className="flex gap-2">
+        <form onSubmit={handleSave} className="flex gap-2">
           <input
             type="text"
             value={projectName}
             onChange={(e) => setProjectName(e.target.value)}
             placeholder="Nombre del proyecto..."
+            enterKeyHint="done"
             className="flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded-xl px-3 py-2.5 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-brand-500"
           />
-          <Button onClick={handleSave} loading={saving} disabled={!projectName.trim()} className="flex-shrink-0">
+          <Button type="submit" loading={saving} disabled={!projectName.trim()} className="flex-shrink-0">
             Guardar
           </Button>
-        </div>
+        </form>
         <div className="mt-3 grid grid-cols-3 gap-2 text-center">
           {[
             { label: 'clases', value: classes.length },
@@ -86,7 +95,6 @@ export default function ProjectsPage() {
         </div>
       </Card>
 
-      {/* Saved projects */}
       <h2 className="text-sm font-semibold text-gray-400 mb-3">
         Proyectos guardados ({projects.length})
       </h2>
@@ -113,10 +121,12 @@ export default function ProjectsPage() {
               <div className="flex items-center gap-2 flex-shrink-0">
                 {p.hasModel && <Badge variant="success" className="hidden sm:inline-flex">Modelo</Badge>}
                 <button
+                  type="button"
                   onClick={() => handleDelete(p.id)}
-                  className="w-8 h-8 flex items-center justify-center text-gray-600 hover:text-red-400 hover:bg-red-950/30 rounded-lg transition-colors"
+                  className="w-9 h-9 flex items-center justify-center text-gray-600 hover:text-red-400 hover:bg-red-950/30 rounded-lg transition-colors touch-manipulation"
+                  aria-label="Eliminar proyecto"
                 >
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                   </svg>
                 </button>

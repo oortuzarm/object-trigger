@@ -10,9 +10,19 @@ export default function Layout() {
   const { setClasses, setModelReady } = useAppStore()
 
   useEffect(() => {
-    getAllClasses().then(setClasses)
-    loadModel().then((m) => {
-      if (m) setModelReady(m.classIds)
+    // Load classes first, then cross-validate stored model against actual class IDs.
+    // If any class the model was trained on no longer exists, the model is stale
+    // and modelStatus stays 'not_trained' (IDB cleanup happens on next deleteClass).
+    getAllClasses().then((classes) => {
+      setClasses(classes)
+      loadModel().then((m) => {
+        if (!m || m.classIds.length === 0) return
+        const currentIds = new Set(classes.map((c) => c.id))
+        const allPresent = m.classIds.every((id) => currentIds.has(id))
+        if (allPresent && classes.length > 0) {
+          setModelReady(m.classIds)
+        }
+      })
     })
   }, [])
 

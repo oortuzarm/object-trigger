@@ -12,7 +12,7 @@ import type { TrainingConfig } from '@/types/training.types'
 
 export default function TrainingPage() {
   const navigate = useNavigate()
-  const { classes, hasTrainedModel, modelClassIds } = useAppStore()
+  const { classes, modelStatus, modelClassIds } = useAppStore()
   const { trainingProgress, startTraining, cancelTraining } = useTraining()
   const [config, setConfig] = useState<TrainingConfig>(DEFAULT_TRAINING_CONFIG)
 
@@ -37,9 +37,14 @@ export default function TrainingPage() {
             Transfer learning en el navegador
           </p>
         </div>
-        {hasTrainedModel && (
+        {modelStatus === 'ready' && (
           <Badge variant="success" dot className="flex-shrink-0 mt-1">
             {modelClassIds.length} clase{modelClassIds.length !== 1 ? 's' : ''}
+          </Badge>
+        )}
+        {modelStatus === 'outdated' && (
+          <Badge variant="warning" dot className="flex-shrink-0 mt-1">
+            Desactualizado
           </Badge>
         )}
       </div>
@@ -149,7 +154,7 @@ export default function TrainingPage() {
               disabled={!canTrain}
               className="flex-1"
             >
-              {hasTrainedModel ? 'Re-entrenar' : 'Iniciar entrenamiento'}
+              {modelStatus !== 'not_trained' ? 'Re-entrenar' : 'Iniciar entrenamiento'}
             </Button>
             {trainingProgress?.status === 'done' && (
               <Button onClick={() => navigate('/inference')} variant="secondary" className="sm:flex-shrink-0">

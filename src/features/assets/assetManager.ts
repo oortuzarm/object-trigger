@@ -1,7 +1,8 @@
 import { saveAssetBlob, loadAssetURL, deleteAssetBlob } from '@/features/storage/assetsStore'
+import { generateId } from '@/utils/generateId'
 
 export async function uploadAsset(file: File): Promise<string> {
-  const id = crypto.randomUUID()
+  const id = generateId()
   await saveAssetBlob(id, file)
   return id
 }

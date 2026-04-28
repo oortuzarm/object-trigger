@@ -19,27 +19,23 @@ export default function ClassForm({ open, onClose, onSubmit, editing }: ClassFor
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    console.log('[ClassForm] form submit fired, name=', JSON.stringify(name))
     if (!name.trim()) {
       setError('El nombre es requerido')
-      console.log('[ClassForm] validation failed: empty name')
       return
     }
     if (name.trim().length < 2) {
       setError('Mínimo 2 caracteres')
-      console.log('[ClassForm] validation failed: too short')
       return
     }
     setLoading(true)
     try {
-      console.log('[ClassForm] calling onSubmit...')
       await onSubmit(name.trim(), color)
-      console.log('[ClassForm] onSubmit ok, closing modal')
       setName('')
       setError('')
       onClose()
-    } catch (err) {
-      console.error('[ClassForm] onSubmit threw:', err)
+    } catch (error) {
+      console.error('Error saving class:', error)
+      setError('Error al guardar. Inténtalo de nuevo.')
     } finally {
       setLoading(false)
     }
@@ -55,7 +51,8 @@ export default function ClassForm({ open, onClose, onSubmit, editing }: ClassFor
             value={name}
             onChange={(e) => { setName(e.target.value); setError('') }}
             placeholder="ej: Botella, Caja, Silla..."
-            className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-2.5 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500"
+            enterKeyHint="done"
+            className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500"
           />
           {error && <p className="text-xs text-red-400 mt-1.5">{error}</p>}
         </div>
@@ -68,11 +65,11 @@ export default function ClassForm({ open, onClose, onSubmit, editing }: ClassFor
                 key={c}
                 type="button"
                 onClick={() => setColor(c)}
-                className="w-7 h-7 rounded-full transition-all duration-150 focus:outline-none"
+                className="w-8 h-8 rounded-full transition-all duration-150 focus:outline-none touch-manipulation"
                 style={{
                   backgroundColor: c,
                   outline: color === c ? `2px solid ${c}` : '2px solid transparent',
-                  outlineOffset: '2px',
+                  outlineOffset: '3px',
                 }}
               />
             ))}
@@ -83,14 +80,7 @@ export default function ClassForm({ open, onClose, onSubmit, editing }: ClassFor
           <Button type="button" variant="ghost" onClick={onClose} className="flex-1">
             Cancelar
           </Button>
-          <Button
-            type="submit"
-            loading={loading}
-            className="flex-1"
-            onTouchStart={() => console.log('[ClassForm] submit button touchstart')}
-            onTouchEnd={() => console.log('[ClassForm] submit button touchend')}
-            onClick={() => console.log('[ClassForm] submit button click')}
-          >
+          <Button type="submit" loading={loading} className="flex-1">
             {editing ? 'Guardar cambios' : 'Crear clase'}
           </Button>
         </div>

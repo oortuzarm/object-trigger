@@ -25,8 +25,11 @@ export function Modal({ open, onClose, title, children, size = 'md' }: ModalProp
 
     const update = () => {
       const offset = Math.max(0, window.innerHeight - vv.offsetTop - vv.height)
-      // Debounce so layout doesn't shift mid-tap: click fires ~50ms after touchend,
-      // debounce fires 150ms after the last resize event (after keyboard animation ends).
+      // Debounce: the layout must stay frozen until after the tap's click event fires
+      // (~50ms after touchend). iOS fires visualViewport.resize when keyboard starts
+      // closing (on blur), which would shift the modal before click fires and cause
+      // the tap to miss the button. Waiting 150ms after the last resize event means
+      // the shift only happens after the keyboard animation ends (~250ms total).
       if (debounceRef.current) clearTimeout(debounceRef.current)
       debounceRef.current = setTimeout(() => setKeyboardOffset(offset), 150)
     }
@@ -59,7 +62,7 @@ export function Modal({ open, onClose, title, children, size = 'md' }: ModalProp
     >
       <div
         className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-fade-in"
-        onClick={() => { console.log('[Modal] backdrop click'); onClose() }}
+        onClick={onClose}
       />
       <div
         className={[
@@ -73,8 +76,9 @@ export function Modal({ open, onClose, title, children, size = 'md' }: ModalProp
           <div className="flex items-center justify-between px-5 pt-4 pb-4 border-b border-gray-800">
             <h2 className="text-base font-semibold text-gray-100">{title}</h2>
             <button
+              type="button"
               onClick={onClose}
-              className="text-gray-500 hover:text-gray-300 transition-colors p-1.5 rounded-lg hover:bg-white/5 -mr-1"
+              className="w-8 h-8 flex items-center justify-center text-gray-500 hover:text-gray-300 transition-colors rounded-lg hover:bg-white/5 -mr-1 touch-manipulation"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />

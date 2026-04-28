@@ -6,6 +6,7 @@ import { updateSampleCount } from '@/features/storage/classesStore'
 import { useAppStore } from '@/store/appStore'
 import type { TrainingSample, QualityReport } from '@/types/sample.types'
 import { toast } from '@/components/ui/Toast'
+import { generateId } from '@/utils/generateId'
 
 const CAPTURE_HINTS = [
   'Varía el ángulo: fotografía desde arriba o abajo',
@@ -63,7 +64,7 @@ export function useCapture(classId: string) {
       const thumbnail = thumb.toDataURL('image/jpeg', 0.7)
 
       const sample: TrainingSample = {
-        id: crypto.randomUUID(),
+        id: generateId(),
         classId,
         blob,
         capturedAt: Date.now(),

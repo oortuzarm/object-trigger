@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { useEffect } from 'react'
+import { generateId } from '@/utils/generateId'
 
 type ToastType = 'success' | 'error' | 'warning' | 'info'
 
@@ -18,7 +18,7 @@ interface ToastStore {
 const useToastStore = create<ToastStore>((set) => ({
   toasts: [],
   add: (type, message) => {
-    const id = crypto.randomUUID()
+    const id = generateId()
     set((s) => ({ toasts: [...s.toasts, { id, type, message }] }))
     setTimeout(() => {
       set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }))
@@ -67,8 +67,12 @@ function ToastItem({ toast: t }: { toast: ToastItem }) {
       <span className={['w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0', iconColorMap[t.type]].join(' ')}>
         {iconMap[t.type]}
       </span>
-      <span className="text-sm font-medium">{t.message}</span>
-      <button onClick={() => remove(t.id)} className="ml-auto opacity-60 hover:opacity-100 transition-opacity">
+      <span className="text-sm font-medium flex-1">{t.message}</span>
+      <button
+        type="button"
+        onClick={() => remove(t.id)}
+        className="w-6 h-6 flex items-center justify-center opacity-60 hover:opacity-100 transition-opacity touch-manipulation flex-shrink-0"
+      >
         <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
         </svg>
@@ -80,7 +84,9 @@ function ToastItem({ toast: t }: { toast: ToastItem }) {
 export function Toaster() {
   const toasts = useToastStore((s) => s.toasts)
   return (
-    <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 w-80 pointer-events-none">
+    // Mobile: full-width above the bottom nav (bottom-20 clears nav ~56px + safe area).
+    // sm+: fixed bottom-right corner.
+    <div className="fixed bottom-20 sm:bottom-4 left-4 right-4 sm:left-auto sm:right-4 sm:w-80 z-[100] flex flex-col gap-2 pointer-events-none">
       {toasts.map((t) => (
         <div key={t.id} className="pointer-events-auto">
           <ToastItem toast={t} />
