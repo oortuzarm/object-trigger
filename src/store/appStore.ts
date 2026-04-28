@@ -73,6 +73,7 @@ export const useAppStore = create<AppState>((set) => ({
   inferenceState: {
     status: 'idle',
     currentDetection: null,
+    debugPrediction: null,
     fps: 0,
   },
   setInferenceState: (partial) =>

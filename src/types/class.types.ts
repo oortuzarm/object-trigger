@@ -64,7 +64,7 @@ export function createObjectClass(name: string, color?: string): ObjectClass {
     id: generateId(),
     name,
     color: color ?? CLASS_COLORS[Math.floor(Math.random() * CLASS_COLORS.length)],
-    confidenceThreshold: 0.7,
+    confidenceThreshold: 0.75,
     showName: true,
     showConfidence: true,
     asset: null,

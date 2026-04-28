@@ -1,26 +1,37 @@
 /**
  * INFERENCE ENGINE
  *
- * Frame pipeline (must mirror the training preprocessing exactly):
- *   1. Capture raw 224×224 square crop from video
- *   2. detectAndCrop() → same object-isolation preprocessing used at capture time
- *      (COCO-SSD → saliency → center fallback)
- *   3. canvas → tf.Tensor directly (no blob/bitmap roundtrip, avoids OffscreenCanvas compat issues)
+ * Frame pipeline (must mirror training preprocessing exactly):
+ *   1. Capture raw 224×224 square from video
+ *   2. detectAndCrop() — same object-isolation pipeline used at capture time
+ *   3. canvas → tf.Tensor directly (no blob/bitmap roundtrip)
  *   4. MobileNet feature extraction
  *   5. Classifier predict → all class probabilities
- *   6. Temporal smoothing (5-frame window)
+ *   6. PredictionSmoother → stable detection OR best-guess debug data
+ *
+ * The engine emits a FrameResult on every inference cycle.
+ * CONFIRMED detections require REQUIRED_STREAK consecutive frames above the
+ * confidence floor. Per-class threshold checking is done in useInference.ts.
  */
 
 import * as tf from '@tensorflow/tfjs'
 import { loadFeatureExtractor } from '@/features/training/featureExtractor'
 import { deserializeModel } from '@/features/training/modelSerializer'
-import { PredictionSmoother } from './predictionSmoothing'
+import { PredictionSmoother, REQUIRED_STREAK } from './predictionSmoothing'
 // --- Object segmentation preprocessing (must match training pipeline) ---
 import {
   detectAndCrop,
   preloadDetector,
 } from '@/features/segmentation/objectCropper'
-import type { DetectionResult } from '@/types/inference.types'
+
+export interface FrameResult {
+  /** Non-null only when streak + confidence floor are both met. */
+  stable: { classId: string; avgConfidence: number; streak: number } | null
+  /** Always set — current frame's winner for debug display. */
+  bestGuess: { classId: string; confidence: number; streak: number; allProbs: number[] }
+  cropMethod: string
+  requiredStreak: number
+}
 
 export class InferenceEngine {
   private model: tf.LayersModel | null = null
@@ -38,9 +49,8 @@ export class InferenceEngine {
   ): Promise<void> {
     this.classIds = classIds
 
-    // Load feature extractor and COCO-SSD detector in parallel.
-    // COCO-SSD must be preloaded here so inference frames get the same
-    // object-crop preprocessing that was applied during training capture.
+    // Load feature extractor and COCO-SSD in parallel.
+    // Both must be ready before the first inference frame.
     const [extractor] = await Promise.all([
       loadFeatureExtractor(),
       preloadDetector(),
@@ -52,7 +62,7 @@ export class InferenceEngine {
 
   start(
     videoEl: HTMLVideoElement,
-    onDetection: (result: DetectionResult | null) => void,
+    onFrame: (result: FrameResult) => void,
     onFps: (fps: number) => void,
     onError?: (msg: string) => void
   ) {
@@ -66,7 +76,7 @@ export class InferenceEngine {
       }
 
       try {
-        // ── Step 1: Capture raw 224×224 square from video ──────────────────
+        // ── Step 1: Capture raw 224×224 square from video ────────────────
         const rawCanvas = document.createElement('canvas')
         rawCanvas.width = 224
         rawCanvas.height = 224
@@ -74,19 +84,13 @@ export class InferenceEngine {
         const vw = videoEl.videoWidth
         const vh = videoEl.videoHeight
         const size = Math.min(vw, vh)
-        const ox = (vw - size) / 2
-        const oy = (vh - size) / 2
-        rawCtx.drawImage(videoEl, ox, oy, size, size, 0, 0, 224, 224)
+        rawCtx.drawImage(videoEl, (vw - size) / 2, (vh - size) / 2, size, size, 0, 0, 224, 224)
         const rawImageData = rawCtx.getImageData(0, 0, 224, 224)
 
-        // ── Step 2: Object-crop preprocessing (mirrors training pipeline) ──
-        // detectAndCrop() applies COCO-SSD → saliency → center fallback,
-        // exactly as useCapture.ts does during sample collection.
+        // ── Step 2: Object-crop preprocessing (mirrors training) ─────────
         const cropResult = await detectAndCrop(rawImageData)
 
-        // ── Step 3: Canvas → tensor (no blob/bitmap roundtrip) ────────────
-        // Using a regular canvas avoids OffscreenCanvas compatibility issues
-        // in the main thread on some mobile browsers.
+        // ── Step 3: Canvas → tensor (avoids OffscreenCanvas compat issues)
         const cropCanvas = document.createElement('canvas')
         cropCanvas.width = 224
         cropCanvas.height = 224
@@ -99,8 +103,7 @@ export class InferenceEngine {
             .div(255)
         )
 
-        // ── Step 4: Feature extraction ─────────────────────────────────────
-        // infer(tensor, true) returns the penultimate-layer 1024-dim embedding
+        // ── Step 4: Feature extraction ───────────────────────────────────
         const embeddings = this.extractor.infer(
           tensor as tf.Tensor<tf.Rank>,
           true
@@ -108,32 +111,36 @@ export class InferenceEngine {
         const features = Array.from((await embeddings.data()) as Float32Array)
         tf.dispose([tensor, embeddings])
 
-        // ── Step 5: Classify ───────────────────────────────────────────────
+        // ── Step 5: Classify ─────────────────────────────────────────────
         const input = tf.tensor2d([features])
         const output = this.model.predict(input) as tf.Tensor
         const probs = Array.from((await output.data()) as Float32Array)
         tf.dispose([input, output])
 
-        // ── Step 6: Smooth + emit ──────────────────────────────────────────
+        // ── Step 6: Stability tracking ───────────────────────────────────
         const maxIdx = probs.indexOf(Math.max(...probs))
         const maxConf = probs[maxIdx]
 
-        this.smoother.push(maxIdx, maxConf)
-        const smoothed = this.smoother.getSmoothed()
+        this.smoother.push(maxIdx, maxConf, probs)
 
-        if (smoothed) {
-          onDetection({
-            classId: this.classIds[smoothed.classIndex],
-            className: '',          // filled in by useInference from store
-            confidence: smoothed.confidence,
-            timestamp: Date.now(),
-            isAboveThreshold: true, // threshold check done in useInference
-            allProbabilities: probs,
-            cropMethod: cropResult.cropInfo.method,
-          })
-        }
+        const stable = this.smoother.getStable()
+        const bestGuess = this.smoother.getBestGuess()!
 
-        // FPS counter
+        onFrame({
+          stable: stable
+            ? { classId: this.classIds[stable.classIndex], avgConfidence: stable.avgConfidence, streak: stable.streak }
+            : null,
+          bestGuess: {
+            classId: this.classIds[bestGuess.classIndex],
+            confidence: bestGuess.confidence,
+            streak: bestGuess.streak,
+            allProbs: bestGuess.allProbs,
+          },
+          cropMethod: cropResult.cropInfo.method,
+          requiredStreak: REQUIRED_STREAK,
+        })
+
+        // FPS
         this.frameCount++
         const now = Date.now()
         if (now - this.lastFpsTime >= 1000) {
@@ -145,7 +152,6 @@ export class InferenceEngine {
         const msg = err instanceof Error ? err.message : String(err)
         console.error('[InferenceEngine]', msg)
         onError?.(msg)
-        // Continue loop — don't stop on a single frame error
       }
 
       this.rafId = requestAnimationFrame(loop)
@@ -168,5 +174,4 @@ export class InferenceEngine {
   }
 }
 
-// Singleton used by useInference
 export const inferenceEngine = new InferenceEngine()

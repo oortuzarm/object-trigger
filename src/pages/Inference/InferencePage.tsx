@@ -45,9 +45,13 @@ export default function InferencePage() {
     )
   }
 
-  const det = inferenceState.currentDetection
+  const det = inferenceState.currentDetection        // confirmed stable detection
+  const debug = inferenceState.debugPrediction       // live best-guess for debug panel
   const activeCls = det ? classes.find((c) => c.id === det.classId) : null
+  const debugCls = debug ? classes.find((c) => c.id === debug.classId) : null
   const isRunning = inferenceState.status === 'running'
+
+  const streakPct = debug ? Math.min(100, (debug.streakFrames / debug.requiredFrames) * 100) : 0
 
   return (
     <div className="p-4 sm:p-6 max-w-6xl mx-auto">
@@ -87,7 +91,7 @@ export default function InferencePage() {
           {!isRunning && camera.state.isActive && (
             <div className="mt-3 p-3 rounded-xl border border-dashed border-gray-700 flex flex-col sm:flex-row items-center justify-center gap-3">
               <span className="text-sm text-gray-500 text-center">
-                Cámara activa — presiona Iniciar para reconocer
+                Cámara lista — presiona Iniciar para reconocer
               </span>
               <Button size="sm" onClick={start} className="w-full sm:w-auto">
                 Iniciar reconocimiento
@@ -98,91 +102,106 @@ export default function InferencePage() {
 
         {/* Side panel */}
         <div className="space-y-3">
-          {/* Live detection */}
+          {/* ── Confirmed detection ──────────────────────────────────────── */}
           <Card>
             <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
               Detección activa
             </h3>
 
             {det && activeCls ? (
+              /* ✅ Confirmed stable class */
               <div className="space-y-3">
-                {/* Winner */}
                 <div className="flex items-center gap-3">
                   <div
-                    className={[
-                      'w-10 h-10 rounded-xl flex items-center justify-center text-lg font-bold flex-shrink-0',
-                      det.isAboveThreshold ? 'opacity-100' : 'opacity-40',
-                    ].join(' ')}
+                    className="w-10 h-10 rounded-xl flex items-center justify-center text-lg font-bold flex-shrink-0"
                     style={{ backgroundColor: activeCls.color + '22', color: activeCls.color }}
                   >
                     {det.className[0]?.toUpperCase()}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className={['font-semibold truncate', det.isAboveThreshold ? 'text-gray-100' : 'text-gray-500'].join(' ')}>
-                      {det.isAboveThreshold ? det.className : `Posible: ${det.className}`}
-                    </div>
-                    <div className="text-xs text-gray-500 flex items-center gap-2">
-                      <span>{Math.round(det.confidence * 100)}% confianza</span>
-                      {!det.isAboveThreshold && (
-                        <span className="text-yellow-600">
-                          (umbral: {Math.round((activeCls.confidenceThreshold ?? 0.7) * 100)}%)
-                        </span>
-                      )}
+                    <div className="font-semibold text-gray-100 truncate">{det.className}</div>
+                    <div className="text-xs text-gray-400">
+                      {Math.round(det.confidence * 100)}% confianza · {det.streakFrames} frames
                     </div>
                   </div>
+                  <span className="text-green-400 text-lg flex-shrink-0">✓</span>
                 </div>
 
-                {/* Confidence bar for winning class */}
-                <div className="space-y-0.5">
-                  <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
-                    <div
-                      className="h-full rounded-full transition-all duration-200"
-                      style={{
-                        width: `${Math.round(det.confidence * 100)}%`,
-                        backgroundColor: det.isAboveThreshold ? activeCls.color : activeCls.color + '55',
-                      }}
-                    />
-                  </div>
-                  {/* Threshold marker */}
-                  <div className="relative h-1">
-                    <div
-                      className="absolute top-0 w-px h-2 bg-yellow-600/60"
-                      style={{ left: `${Math.round(activeCls.confidenceThreshold * 100)}%` }}
-                      title="Umbral de confianza"
-                    />
-                  </div>
+                <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full transition-all duration-200"
+                    style={{ width: `${Math.round(det.confidence * 100)}%`, backgroundColor: activeCls.color }}
+                  />
                 </div>
 
-                {/* Crop method badge */}
                 {det.cropMethod && (
                   <div className="text-[10px] text-gray-600">
                     Recorte: {det.cropMethod === 'cocoSsd' ? 'objeto detectado' : det.cropMethod === 'saliency' ? 'saliencia' : 'central'}
                   </div>
                 )}
               </div>
+            ) : isRunning ? (
+              /* 🔍 Searching */
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 text-gray-500">
+                  <svg className="w-4 h-4 animate-spin flex-shrink-0" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+                  </svg>
+                  <span className="text-sm">
+                    {debug && debugCls
+                      ? `Candidato: ${debugCls.name} (${Math.round(debug.confidence * 100)}%)`
+                      : 'Buscando objeto…'}
+                  </span>
+                </div>
+
+                {/* Streak progress */}
+                {debug && debug.streakFrames > 0 && (
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-[10px] text-gray-600">
+                      <span>Estabilidad</span>
+                      <span>{debug.streakFrames}/{debug.requiredFrames} frames</span>
+                    </div>
+                    <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all duration-200 bg-yellow-600"
+                        style={{ width: `${streakPct}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {debug && debugCls && (
+                  <div className="text-[10px] text-gray-600">
+                    Umbral requerido: {Math.round((debugCls.confidenceThreshold ?? 0.75) * 100)}%
+                    {debug.confidence < (debugCls.confidenceThreshold ?? 0.75) && (
+                      <span className="text-yellow-700"> · confianza insuficiente</span>
+                    )}
+                  </div>
+                )}
+              </div>
             ) : (
+              /* ⚪ Idle */
               <div className="text-center py-4 text-gray-600">
                 <div className="text-2xl mb-1">◎</div>
-                <p className="text-xs">
-                  {isRunning ? 'Buscando objetos…' : 'Inactivo'}
-                </p>
+                <p className="text-xs">Inactivo</p>
               </div>
             )}
           </Card>
 
-          {/* All-class probabilities panel — always visible when running */}
+          {/* ── Debug: all-class probabilities ───────────────────────────── */}
           {isRunning && (
             <Card>
               <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
-                Clases del modelo
+                Probabilidades en tiempo real
               </h3>
               <div className="space-y-2">
                 {modelClassIds.map((classId, idx) => {
                   const cls = classes.find((c) => c.id === classId)
                   if (!cls) return null
-                  const prob = det?.allProbabilities?.[idx] ?? null
-                  const isWinner = det?.classId === classId
-                  const isAbove = isWinner && det?.isAboveThreshold
+                  const prob = debug?.allProbabilities?.[idx] ?? null
+                  const isDebugWinner = debug?.classId === classId
+                  const isConfirmed = det?.classId === classId
 
                   return (
                     <div key={classId} className="space-y-0.5">
@@ -190,13 +209,20 @@ export default function InferencePage() {
                         <div className="flex items-center gap-1.5 min-w-0">
                           <span
                             className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-                            style={{ backgroundColor: isWinner ? cls.color : cls.color + '55' }}
+                            style={{ backgroundColor: isDebugWinner ? cls.color : cls.color + '44' }}
                           />
-                          <span className={['text-xs truncate', isWinner ? 'text-gray-200 font-medium' : 'text-gray-500'].join(' ')}>
+                          <span className={[
+                            'text-xs truncate',
+                            isConfirmed ? 'text-green-400 font-medium' : isDebugWinner ? 'text-gray-200 font-medium' : 'text-gray-500',
+                          ].join(' ')}>
                             {cls.name}
+                            {isConfirmed && ' ✓'}
                           </span>
                         </div>
-                        <span className={['text-xs font-mono flex-shrink-0', isAbove ? 'text-green-400' : isWinner ? 'text-yellow-500' : 'text-gray-600'].join(' ')}>
+                        <span className={[
+                          'text-xs font-mono flex-shrink-0',
+                          isConfirmed ? 'text-green-400' : isDebugWinner ? 'text-yellow-500' : 'text-gray-600',
+                        ].join(' ')}>
                           {prob !== null ? `${Math.round(prob * 100)}%` : '—'}
                         </span>
                       </div>
@@ -206,7 +232,7 @@ export default function InferencePage() {
                             className="h-full rounded-full transition-all duration-300"
                             style={{
                               width: `${Math.round(prob * 100)}%`,
-                              backgroundColor: isAbove ? cls.color : isWinner ? cls.color + '88' : cls.color + '33',
+                              backgroundColor: isConfirmed ? cls.color : isDebugWinner ? cls.color + '88' : cls.color + '33',
                             }}
                           />
                         </div>
@@ -215,12 +241,15 @@ export default function InferencePage() {
                   )
                 })}
 
-                {/* FPS indicator */}
-                {inferenceState.fps > 0 && (
-                  <p className="text-[10px] text-gray-700 pt-1 text-right font-mono">
-                    {inferenceState.fps} fps
-                  </p>
-                )}
+                {/* Streak + FPS row */}
+                <div className="flex justify-between text-[10px] text-gray-700 pt-1 font-mono">
+                  {debug && debug.streakFrames > 0 ? (
+                    <span>streak {debug.streakFrames}/{debug.requiredFrames}</span>
+                  ) : (
+                    <span />
+                  )}
+                  {inferenceState.fps > 0 && <span>{inferenceState.fps} fps</span>}
+                </div>
               </div>
             </Card>
           )}
