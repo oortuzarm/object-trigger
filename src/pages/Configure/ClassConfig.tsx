@@ -89,6 +89,30 @@ export default function ClassConfig({ cls }: ClassConfigProps) {
             </div>
           </div>
 
+          {/* OCR keywords */}
+          <div>
+            <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">
+              Palabras clave OCR
+            </h4>
+            <p className="text-[10px] text-gray-600 mb-2">
+              Una por línea. Si el OCR lee estas palabras en la etiqueta, se refuerza la detección.
+            </p>
+            <textarea
+              value={(cls.keywords ?? []).join('\n')}
+              onChange={(e) =>
+                update({
+                  keywords: e.target.value
+                    .split('\n')
+                    .map((k) => k.trim())
+                    .filter(Boolean),
+                })
+              }
+              placeholder={'ej: monterrey\ncafé monterrey\ncafe'}
+              rows={3}
+              className="w-full bg-gray-800 border border-gray-700 rounded-xl px-3 py-2.5 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-brand-500 resize-none font-mono"
+            />
+          </div>
+
           {/* Asset */}
           <div>
             <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">

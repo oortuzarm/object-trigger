@@ -28,6 +28,7 @@ import { getAllEmbeddings } from '@/features/embeddings/embeddingStore'
 import { generateEmbedding } from '@/features/embeddings/embeddingEngine'
 import { findBestMatches } from '@/features/embeddings/similaritySearch'
 import type { StoredEmbeddingRecord } from '@/features/embeddings/embeddingStore'
+import { extractText } from '@/features/ocr/ocrEngine'
 
 export type InferenceMode = 'embeddings' | 'classifier'
 
@@ -45,6 +46,8 @@ export interface FrameResult {
   cropMethod: string
   requiredStreak: number
   mode: InferenceMode
+  /** Last OCR result from the object crop. Updated every ~500ms, null if not yet run. */
+  ocrText: string | null
 }
 
 export class InferenceEngine {
@@ -57,6 +60,13 @@ export class InferenceEngine {
   private rafId: number | null = null
   private frameCount = 0
   private lastFpsTime = 0
+
+  // ── OCR (decoupled, rate-limited to ~2fps) ───────────────────────────────
+  private videoEl: HTMLVideoElement | null = null
+  private lastOcrText: string | null = null
+  private ocrBusy = false
+  private lastOcrTime = 0
+  private readonly OCR_INTERVAL_MS = 500
 
   // ── Loading ──────────────────────────────────────────────────────────────
 
@@ -117,6 +127,10 @@ export class InferenceEngine {
   ) {
     if (this.rafId !== null) this.stop()
     this.smoother.reset()
+    this.videoEl = videoEl
+    this.lastOcrText = null
+    this.ocrBusy = false
+    this.lastOcrTime = 0
 
     const loop = async () => {
       if (!this.extractor || videoEl.readyState < 2) {
@@ -151,9 +165,15 @@ export class InferenceEngine {
             cropMethod: cropInfo.method,
             requiredStreak: REQUIRED_STREAK,
             mode: this.mode,
+            ocrText: this.lastOcrText,
           })
           this.rafId = requestAnimationFrame(loop)
           return
+        }
+
+        // ── Fire OCR async (rate-limited, non-blocking) ───────────────
+        if (!this.ocrBusy && Date.now() - this.lastOcrTime >= this.OCR_INTERVAL_MS) {
+          void this.runOcrAsync(cropInfo.bbox!)
         }
 
         const detection: DetectionInfo = {
@@ -223,6 +243,7 @@ export class InferenceEngine {
           cropMethod: cropInfo.method,
           requiredStreak: REQUIRED_STREAK,
           mode: this.mode,
+          ocrText: this.lastOcrText,
         })
 
         // FPS counter
@@ -252,6 +273,36 @@ export class InferenceEngine {
       this.rafId = null
     }
     this.smoother.reset()
+    this.lastOcrText = null
+    this.ocrBusy = false
+    this.videoEl = null
+  }
+
+  /** Fire OCR on a fresh native-resolution crop. Never called with await — runs independently. */
+  private async runOcrAsync(bbox: [number, number, number, number]): Promise<void> {
+    if (!this.videoEl || this.ocrBusy) return
+    this.ocrBusy = true
+    this.lastOcrTime = Date.now()
+    try {
+      const vw = this.videoEl.videoWidth
+      const vh = this.videoEl.videoHeight
+      const [bx, by, bw, bh] = bbox
+      const srcX = bx * vw, srcY = by * vh, srcW = bw * vw, srcH = bh * vh
+      // Target at least 400px wide so Tesseract can read small text
+      const scale = Math.max(1, 400 / srcW)
+      const tW = Math.round(srcW * scale)
+      const tH = Math.round(srcH * scale)
+      const ocrCanvas = document.createElement('canvas')
+      ocrCanvas.width = tW
+      ocrCanvas.height = tH
+      ocrCanvas.getContext('2d')!.drawImage(this.videoEl, srcX, srcY, srcW, srcH, 0, 0, tW, tH)
+      const text = await extractText(ocrCanvas)
+      this.lastOcrText = text || null
+    } catch {
+      // OCR failure is non-fatal; keep last known text
+    } finally {
+      this.ocrBusy = false
+    }
   }
 
   isLoaded() {

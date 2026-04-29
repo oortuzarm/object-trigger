@@ -335,6 +335,34 @@ export default function InferencePage() {
                         </p>
                       </div>
 
+                      {/* OCR result */}
+                      <div>
+                        <p className="text-[10px] font-semibold text-gray-600 uppercase tracking-wider mb-1">
+                          OCR
+                        </p>
+                        {debug.ocrText ? (
+                          <div className="space-y-1">
+                            <p className="text-[10px] font-mono text-gray-500 break-all leading-relaxed bg-gray-900/60 px-2 py-1 rounded-lg">
+                              "{debug.ocrText}"
+                            </p>
+                            {debug.ocrMatchClassId ? (
+                              <p className="text-[10px] text-green-600">
+                                Match: "<span className="font-mono">{debug.ocrMatchedKeyword}</span>" →{' '}
+                                <span className="font-medium">
+                                  {classes.find((c) => c.id === debug.ocrMatchClassId)?.name}
+                                </span>
+                              </p>
+                            ) : (
+                              <p className="text-[10px] text-gray-700">Sin match con keywords configuradas</p>
+                            )}
+                          </div>
+                        ) : (
+                          <p className="text-[10px] text-gray-700">
+                            {debug.ocrText === null ? 'Sin texto detectado' : 'OCR aún en progreso…'}
+                          </p>
+                        )}
+                      </div>
+
                       {/* Crop thumbnail */}
                       {debug.cropThumbnail && (
                         <div>

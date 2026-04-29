@@ -28,6 +28,12 @@ export interface DebugPrediction {
   detectionLabel: string
   detectionBbox: [number, number, number, number]
   cropThumbnail: string | null
+  /** Last OCR text extracted from the object crop (cleaned, lowercase). */
+  ocrText: string | null
+  /** Class whose keywords matched the OCR text, if any. */
+  ocrMatchClassId: string | null
+  /** Specific keyword that triggered the match. */
+  ocrMatchedKeyword: string | null
 }
 
 export type InferenceStatus = 'idle' | 'running' | 'no_model' | 'error'

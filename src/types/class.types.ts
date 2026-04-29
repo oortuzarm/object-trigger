@@ -46,6 +46,8 @@ export interface ObjectClass {
   showName: boolean
   showConfidence: boolean
   asset: ClassAsset | null
+  /** OCR keyword list — words/phrases that, when detected in label text, confirm this class. */
+  keywords: string[]
   sampleCount: number
   createdAt: number
   updatedAt: number
@@ -68,6 +70,7 @@ export function createObjectClass(name: string, color?: string): ObjectClass {
     showName: true,
     showConfidence: true,
     asset: null,
+    keywords: [],
     sampleCount: 0,
     createdAt: Date.now(),
     updatedAt: Date.now(),
