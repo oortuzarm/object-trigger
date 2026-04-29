@@ -130,7 +130,7 @@ export default function DetectionOverlay({ videoRef }: DetectionOverlayProps) {
 
       {/* ── Confirmed label (top-left of camera view) ────────────────────────── */}
       {visible && cls && currentDetection && (
-        <div className="absolute top-4 left-4 z-20 animate-fade-in">
+        <div className="absolute top-4 left-4 z-20 animate-fade-in flex flex-col items-start gap-1.5">
           <DetectionLabel
             name={cls.name}
             confidence={currentDetection.confidence}
@@ -138,6 +138,16 @@ export default function DetectionOverlay({ videoRef }: DetectionOverlayProps) {
             showName={cls.showName}
             showConfidence={cls.showConfidence}
           />
+          {debugPrediction?.ocrScore != null &&
+           debugPrediction.ocrScore >= 0.75 &&
+           debugPrediction.ocrMatchClassId === currentDetection.classId && (
+            <div className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-500/80 text-white backdrop-blur-sm">
+              <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Texto confirmado
+            </div>
+          )}
         </div>
       )}
 

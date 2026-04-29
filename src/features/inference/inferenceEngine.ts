@@ -38,7 +38,7 @@ import { getAllEmbeddings } from '@/features/embeddings/embeddingStore'
 import { generateEmbedding } from '@/features/embeddings/embeddingEngine'
 import { findBestMatches } from '@/features/embeddings/similaritySearch'
 import type { StoredEmbeddingRecord } from '@/features/embeddings/embeddingStore'
-import { extractText } from '@/features/ocr/ocrEngine'
+import { extractText, cleanText } from '@/features/ocr/ocrEngine'
 
 export type InferenceMode = 'embeddings' | 'classifier'
 
@@ -109,6 +109,13 @@ const MAX_PRESCORE_CANDIDATES = 3
  */
 const PRESCORE_INTERVAL = 20
 
+// ── OCR history entry ─────────────────────────────────────────────────────────
+
+interface OcrEntry {
+  text: string
+  timestamp: number
+}
+
 // ── Engine class ──────────────────────────────────────────────────────────────
 
 export class InferenceEngine {
@@ -137,6 +144,12 @@ export class InferenceEngine {
   // ── OCR (decoupled, rate-limited) ─────────────────────────────────────────
   private videoEl: HTMLVideoElement | null = null
   private lastOcrText: string | null = null
+  private ocrHistory: OcrEntry[] = []
+  private readonly OCR_HISTORY_SIZE = 7
+  /** Entries older than this are ignored in majority-vote. */
+  private readonly OCR_EXPIRY_MS = 2500
+  /** bboxKey of the candidate that owns the current ocrHistory. */
+  private currentCandidateId: string | null = null
   private ocrBusy = false
   private lastOcrTime = 0
   private readonly OCR_INTERVAL_MS = 500
@@ -304,6 +317,39 @@ export class InferenceEngine {
 
   // ── OCR (fire-and-forget, rate-limited) ───────────────────────────────────
 
+  /**
+   * Discard expired entries, then return the most frequent non-empty text.
+   * Tie-breaking: highest timestamp (most recent reading) wins.
+   */
+  private stableOcrText(): string | null {
+    const now = Date.now()
+    this.ocrHistory = this.ocrHistory.filter(e => now - e.timestamp < this.OCR_EXPIRY_MS)
+    if (this.ocrHistory.length === 0) return null
+
+    const freq = new Map<string, { count: number; lastTs: number }>()
+    for (const e of this.ocrHistory) {
+      const cur = freq.get(e.text)
+      if (!cur) {
+        freq.set(e.text, { count: 1, lastTs: e.timestamp })
+      } else {
+        cur.count++
+        if (e.timestamp > cur.lastTs) cur.lastTs = e.timestamp
+      }
+    }
+
+    let best = ''
+    let bestCount = 0
+    let bestTs = 0
+    for (const [text, { count, lastTs }] of freq) {
+      if (count > bestCount || (count === bestCount && lastTs > bestTs)) {
+        best = text
+        bestCount = count
+        bestTs = lastTs
+      }
+    }
+    return best || null
+  }
+
   private async runOcrAsync(bbox: [number, number, number, number]): Promise<void> {
     if (!this.videoEl || this.ocrBusy) return
     this.ocrBusy = true
@@ -320,8 +366,14 @@ export class InferenceEngine {
       ocrCanvas.width = tW
       ocrCanvas.height = tH
       ocrCanvas.getContext('2d')!.drawImage(this.videoEl, srcX, srcY, srcW, srcH, 0, 0, tW, tH)
-      const text = await extractText(ocrCanvas)
-      this.lastOcrText = text || null
+      const raw = await extractText(ocrCanvas)
+      // extractText already calls cleanText; apply again for an explicit normalize step
+      const text = raw ? cleanText(raw) : ''
+      if (text) {
+        this.ocrHistory.push({ text, timestamp: Date.now() })
+        if (this.ocrHistory.length > this.OCR_HISTORY_SIZE) this.ocrHistory.shift()
+      }
+      this.lastOcrText = this.stableOcrText()
     } catch {
       // non-fatal
     } finally {
@@ -344,6 +396,8 @@ export class InferenceEngine {
     this.lockedFrames = 0
     this.weakSigFrames = 0
     this.lastOcrText = null
+    this.ocrHistory = []
+    this.currentCandidateId = null
     this.ocrBusy = false
     this.lastOcrTime = 0
     this.prescoredEmbeddings.clear()
@@ -393,6 +447,9 @@ export class InferenceEngine {
           this.lockedFrames = 0
           this.weakSigFrames = 0
           this.prescoredEmbeddings.clear()
+          this.currentCandidateId = null
+          this.ocrHistory = []
+          this.lastOcrText = null
           emitEmpty()
           this.rafId = requestAnimationFrame(loop)
           return
@@ -415,6 +472,14 @@ export class InferenceEngine {
 
         // ── Temporal tracking: select winner ──────────────────────────────
         const selected = this.selectCandidate(ranked)!
+
+        // ── OCR context: reset history when dominant candidate class changes ─
+        const newCandidateId = selected.detection.label
+        if (newCandidateId !== this.currentCandidateId) {
+          this.currentCandidateId = newCandidateId
+          this.ocrHistory = []
+          this.lastOcrText = null
+        }
 
         // ── OCR async (rate-limited, non-blocking) ────────────────────────
         if (!this.ocrBusy && Date.now() - this.lastOcrTime >= this.OCR_INTERVAL_MS) {
@@ -551,6 +616,8 @@ export class InferenceEngine {
     this.lockedFrames = 0
     this.weakSigFrames = 0
     this.lastOcrText = null
+    this.ocrHistory = []
+    this.currentCandidateId = null
     this.ocrBusy = false
     this.videoEl = null
     this.prescoredEmbeddings.clear()

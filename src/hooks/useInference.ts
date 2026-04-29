@@ -58,24 +58,17 @@ export function useInference(videoRef: React.RefObject<HTMLVideoElement>) {
         const cls = classes.find((c) => c.id === stable.classId)
         if (cls) {
           const base = cls.confidenceThreshold
-          const ocrConfirms = stable.classId === ocrMatchClassId
+          const ocrSignal = stable.classId === ocrMatchClassId ? ocrScore : 0
 
-          let effective = base
-          if (ocrConfirms) {
-            if (ocrScore >= 0.85) {
-              effective = Math.max(0.40, base * 0.80)
-            } else if (ocrScore >= 0.60) {
-              effective = Math.max(0.45, base * 0.87)
-            }
+          // Normalized weighted sum: visual×0.60 + ocr×0.25 + stability×0.15
+          // When OCR has no signal its weight is redistributed so the visual signal
+          // isn't penalized — the denominator is the sum of active weights only.
+          const W = { visual: 0.60, ocr: 0.25, stability: 0.15 }
+          const denominator = W.visual + (ocrSignal > 0 ? W.ocr : 0) + W.stability
+          const finalScore =
+            (stable.avgConfidence * W.visual + ocrSignal * W.ocr + 1.0 * W.stability) / denominator
 
-            const sorted = [...bestGuess.allProbs].sort((a, b) => b - a)
-            const gap = (sorted[0] ?? 0) - (sorted[1] ?? 0)
-            if (gap < 0.10 && (sorted[0] ?? 0) > 0.30 && ocrScore >= 0.60) {
-              effective = Math.max(0.40, effective * 0.95)
-            }
-          }
-
-          if (stable.avgConfidence >= effective) {
+          if (finalScore >= base) {
             currentDetection = {
               classId: cls.id,
               className: cls.name,
