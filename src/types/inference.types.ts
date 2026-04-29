@@ -1,7 +1,7 @@
-import type { InferenceMode } from '@/features/inference/inferenceEngine'
+import type { InferenceMode, CandidateInfo } from '@/features/inference/inferenceEngine'
 import type { OcrMatchType } from '@/features/ocr/ocrMatcher'
 
-export type { InferenceMode }
+export type { InferenceMode, CandidateInfo }
 export type { OcrMatchType }
 
 export interface DetectionResult {
@@ -40,6 +40,10 @@ export interface DebugPrediction {
   ocrMatchType: OcrMatchType | null
   /** Combined score: rawSimilarity * lengthWeight. Range 0–1, null if no match. */
   ocrScore: number | null
+  /** All ranked COCO candidates for this frame (best first). */
+  candidates: CandidateInfo[]
+  /** Consecutive frames the selected bbox has been locked. */
+  lockedFrames: number
 }
 
 export type InferenceStatus = 'idle' | 'running' | 'no_model' | 'error'

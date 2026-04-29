@@ -315,10 +315,57 @@ export default function InferencePage() {
 
                   {debug ? (
                     <>
-                      {/* COCO-SSD info */}
+                      {/* Candidate ranking */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <p className="text-[10px] font-semibold text-gray-600 uppercase tracking-wider">
+                            Candidatos ({debug.candidates.length})
+                          </p>
+                          {debug.lockedFrames > 0 && (
+                            <span className="text-[9px] font-mono text-gray-700">
+                              lock {debug.lockedFrames}f
+                            </span>
+                          )}
+                        </div>
+                        {debug.candidates.length > 0 ? (
+                          <div className="space-y-1">
+                            {debug.candidates.slice(0, 4).map((c, i) => (
+                              <div
+                                key={i}
+                                className={[
+                                  'rounded-lg px-2 py-1.5',
+                                  c.isLocked ? 'bg-yellow-950/30 border border-yellow-900/40' : 'bg-gray-900/50',
+                                ].join(' ')}
+                              >
+                                <div className="flex items-center gap-1.5 mb-0.5">
+                                  <span className={['text-[9px] w-2.5 flex-shrink-0 text-center', c.isLocked ? 'text-yellow-600' : 'text-gray-700'].join(' ')}>
+                                    {c.isLocked ? '★' : `${i + 1}`}
+                                  </span>
+                                  <span className="text-[10px] font-mono text-gray-400 flex-1 truncate">{c.label}</span>
+                                  <span className="text-[10px] font-mono font-bold text-gray-200 flex-shrink-0">
+                                    {Math.round(c.finalScore * 100)}
+                                  </span>
+                                </div>
+                                <div className="flex gap-2 text-[9px] font-mono text-gray-700 pl-3.5">
+                                  <span>C:{Math.round(c.centerScore * 100)}</span>
+                                  <span>A:{Math.round(c.areaScore * 100)}</span>
+                                  <span>D:{Math.round(c.detectorScore * 100)}</span>
+                                </div>
+                              </div>
+                            ))}
+                            <p className="text-[9px] text-gray-800 pl-0.5">
+                              C=centro · A=área · D=detector · final=0.45C+0.35A+0.20D
+                            </p>
+                          </div>
+                        ) : (
+                          <p className="text-[10px] text-gray-700">Sin candidatos válidos</p>
+                        )}
+                      </div>
+
+                      {/* COCO-SSD selected detection */}
                       <div>
                         <p className="text-[10px] font-semibold text-gray-600 uppercase tracking-wider mb-1">
-                          COCO-SSD (detector genérico)
+                          Seleccionado
                         </p>
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-mono text-blue-500">{debug.detectionLabel}</span>
@@ -330,9 +377,6 @@ export default function InferencePage() {
                             />
                           </div>
                         </div>
-                        <p className="text-[9px] text-gray-700 mt-1">
-                          Sirve solo para obtener el bbox/crop. No es una clase entrenada.
-                        </p>
                       </div>
 
                       {/* OCR result */}

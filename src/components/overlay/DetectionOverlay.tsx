@@ -28,10 +28,26 @@ export default function DetectionOverlay() {
   // Bbox from current confirmed detection OR live debug frame
   const bbox = currentDetection?.detectionBbox ?? debugPrediction?.detectionBbox ?? null
   const isConfirmed = !!currentDetection && !!cls
+  const secondaryCandidates = (debugPrediction?.candidates ?? []).filter((c) => !c.isLocked)
 
   return (
     <>
-      {/* ── Bounding box — visual guide only, no COCO label ──────────── */}
+      {/* ── Secondary candidate bboxes (dimmed, dashed) ──────────────── */}
+      {secondaryCandidates.map((c, i) => (
+        <div
+          key={i}
+          className="absolute pointer-events-none z-10 rounded"
+          style={{
+            left: `${c.normBbox[0] * 100}%`,
+            top: `${c.normBbox[1] * 100}%`,
+            width: `${c.normBbox[2] * 100}%`,
+            height: `${c.normBbox[3] * 100}%`,
+            border: '1px dashed rgba(156,163,175,0.35)',
+          }}
+        />
+      ))}
+
+      {/* ── Primary bbox — visual guide only, no COCO label ──────────── */}
       {bbox && (
         <div
           className="absolute pointer-events-none z-10 rounded"

@@ -17,7 +17,9 @@
  */
 
 import * as cocoSsd from '@tensorflow-models/coco-ssd'
+import type { RawDetection } from './candidateRanker'
 
+export type { RawDetection }
 export type CropMethod = 'cocoSsd' | 'saliency' | 'center'
 
 export interface CropInfo {
@@ -56,6 +58,30 @@ export async function preloadDetector(): Promise<void> {
 
 export function isDetectorReady(): boolean {
   return _model !== null
+}
+
+/**
+ * Return ALL COCO-SSD detections on a canvas as RawDetection objects.
+ * Used by the inference engine for multi-candidate ranking.
+ * Returns empty array if model is not loaded or inference fails.
+ */
+export async function detectAllObjects(
+  srcCanvas: HTMLCanvasElement,
+  minScore = 0.35,
+): Promise<RawDetection[]> {
+  if (!_model) return []
+  try {
+    const predictions = await _model.detect(srcCanvas)
+    return predictions
+      .filter((p) => p.score >= minScore)
+      .map((p) => ({
+        bbox: p.bbox as [number, number, number, number],
+        score: p.score,
+        label: p.class,
+      }))
+  } catch {
+    return []
+  }
 }
 
 // ── Main export ───────────────────────────────────────────────────────────────
@@ -237,8 +263,9 @@ function canvasToBlob(canvas: HTMLCanvasElement, quality = 0.9): Promise<Blob> {
 /**
  * Crop src to a padded, square region around a bounding box, then scale to targetSize.
  * Makes the crop square by using the longer bbox dimension as the side.
+ * Exported for use by the inference engine after candidate selection.
  */
-function squareCropCanvas(
+export function squareCropCanvas(
   src: HTMLCanvasElement,
   bx: number, by: number, bw: number, bh: number,
   padding: number, targetSize: number

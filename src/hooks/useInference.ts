@@ -12,7 +12,7 @@ export function useInference(videoRef: React.RefObject<HTMLVideoElement>) {
 
   const handleFrame = useCallback(
     (frame: FrameResult) => {
-      const { stable, bestGuess, detection, cropThumbnail, cropMethod, requiredStreak, mode, ocrText } = frame
+      const { stable, bestGuess, detection, cropThumbnail, cropMethod, requiredStreak, mode, ocrText, candidates, lockedFrames } = frame
 
       // No COCO-SSD detection → classifier/embeddings did not run
       if (!bestGuess || !detection) {
@@ -45,6 +45,8 @@ export function useInference(videoRef: React.RefObject<HTMLVideoElement>) {
             ocrMatchedKeyword,
             ocrMatchType,
             ocrScore: ocrMatch ? ocrScore : null,
+            candidates,
+            lockedFrames,
           }
         : null
 
