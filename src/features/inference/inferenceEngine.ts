@@ -4,19 +4,27 @@
  * Two recognition modes, selected at load time:
  *
  *   'embeddings' (primary)
- *     COCO-SSD → multi-candidate ranking → crop → MobileNet embedding
- *     → cosine similarity search → stability tracking → result.
+ *     COCO-SSD → multi-candidate ranking → prescore (embedding+OCR) → crop
+ *     → MobileNet embedding → cosine similarity search → stability tracking → result.
  *
  *   'classifier' (fallback)
  *     Same pipeline up to crop, then Dense head → softmax.
  *
- * Object selection (replaces "take the top-scoring COCO detection"):
- *   All COCO detections above a minimum threshold are ranked by a weighted
- *   combination of centerScore + areaScore + detectorScore. Temporal tracking
- *   keeps the selected bbox stable across frames (LOCK_MIN_FRAMES hold before
- *   switching; switch only when a better candidate appears by SWITCH_THRESHOLD).
- *   If the locked candidate's embedding similarity stays < 0.25 for
- *   WEAK_SIG_THRESHOLD frames, the lock is released and re-ranking happens.
+ * Candidate selection:
+ *   All COCO detections above a minimum threshold are first ranked by spatial
+ *   signals (center + area + detector). When in embeddings mode, the top
+ *   MAX_PRESCORE_CANDIDATES are prescored (embedding + OCR hint) and re-ranked
+ *   using the full 5-signal formula before temporal tracking selects the winner.
+ *
+ *   Prescore is skipped when the lock is stable AND the interval has not elapsed,
+ *   and the previously cached embedding for the locked candidate is reused in
+ *   the recognition phase to avoid redundant inference.
+ *
+ * Temporal tracking (LOCK_MIN_FRAMES hold + IoU continuity + weak-signal release):
+ *   Keeps the selected bbox stable across frames. Releases the lock when:
+ *     - The locked bbox no longer overlaps any current detection (IoU < CONTINUITY_IOU)
+ *     - A significantly better candidate appears after LOCK_MIN_FRAMES hold
+ *     - The embedding signal stays weak for WEAK_SIG_THRESHOLD frames
  */
 
 import * as tf from '@tensorflow/tfjs'
@@ -24,7 +32,7 @@ import { loadFeatureExtractor } from '@/features/training/featureExtractor'
 import { deserializeModel } from '@/features/training/modelSerializer'
 import { PredictionSmoother, REQUIRED_STREAK } from './predictionSmoothing'
 import { detectAllObjects, squareCropCanvas, preloadDetector } from '@/features/segmentation/objectCropper'
-import { rankCandidates, bboxIoU } from '@/features/segmentation/candidateRanker'
+import { rankCandidates, rerankAfterPrescore, bboxIoU } from '@/features/segmentation/candidateRanker'
 import type { ScoredCandidate } from '@/features/segmentation/candidateRanker'
 import { getAllEmbeddings } from '@/features/embeddings/embeddingStore'
 import { generateEmbedding } from '@/features/embeddings/embeddingEngine'
@@ -47,6 +55,9 @@ export interface CandidateInfo {
   centerScore: number
   areaScore: number
   detectorScore: number
+  embeddingScore: number
+  ocrScore: number
+  prescored: boolean
   finalScore: number
   isLocked: boolean
 }
@@ -87,6 +98,17 @@ const WEAK_SIG_THRESHOLD = 3
 /** Minimum IoU with the previously locked bbox to count as "still visible". */
 const CONTINUITY_IOU = 0.30
 
+// ── Prescore constants ────────────────────────────────────────────────────────
+
+/** Number of top spatial candidates to prescore with embedding + OCR. */
+const MAX_PRESCORE_CANDIDATES = 3
+
+/**
+ * Prescore runs every N frames even when the lock is stable,
+ * to catch improvements and keep the cache warm.
+ */
+const PRESCORE_INTERVAL = 20
+
 // ── Engine class ──────────────────────────────────────────────────────────────
 
 export class InferenceEngine {
@@ -104,6 +126,13 @@ export class InferenceEngine {
   private lockedCandidate: ScoredCandidate | null = null
   private lockedFrames = 0
   private weakSigFrames = 0
+
+  // ── Prescore state ────────────────────────────────────────────────────────
+  /** Cached embeddings keyed by bboxKey. Reused in recognition phase. */
+  private prescoredEmbeddings = new Map<string, Float32Array>()
+  /** OCR hint from previous frame (propagated from useInference hook). */
+  private ocrHintClassId: string | null = null
+  private ocrHintScore = 0
 
   // ── OCR (decoupled, rate-limited) ─────────────────────────────────────────
   private videoEl: HTMLVideoElement | null = null
@@ -153,6 +182,18 @@ export class InferenceEngine {
 
   isLoaded(): boolean {
     return this.extractor !== null && (this.storedEmbeddings.length > 0 || this.model !== null)
+  }
+
+  // ── OCR hint (called by useInference after each frame) ────────────────────
+
+  /**
+   * Propagate the OCR signal from the hook back into the engine so that the
+   * next prescore cycle can boost candidates whose best-matching class matches
+   * the OCR hint.
+   */
+  setOcrHint(classId: string | null, score: number): void {
+    this.ocrHintClassId = classId
+    this.ocrHintScore = score
   }
 
   // ── Tracking ──────────────────────────────────────────────────────────────
@@ -212,6 +253,55 @@ export class InferenceEngine {
     return top
   }
 
+  // ── Prescore ──────────────────────────────────────────────────────────────
+
+  /**
+   * Round a normalized bbox to a 5% grid for use as a stable cache key.
+   * Two bboxes that are within ~2.5% of each other map to the same key.
+   */
+  private bboxKey(nb: [number, number, number, number]): string {
+    return nb.map((v) => (Math.round(v * 20) / 20).toFixed(2)).join(',')
+  }
+
+  /**
+   * Generate embeddings for the top-N spatially ranked candidates and assign
+   * embeddingScore + ocrScore to each. Updates prescoredEmbeddings cache.
+   * Only called in embeddings mode when the lock is unstable or every PRESCORE_INTERVAL frames.
+   */
+  private async prescoreTopCandidates(
+    topN: ScoredCandidate[],
+    rawCanvas: HTMLCanvasElement,
+  ): Promise<void> {
+    this.prescoredEmbeddings.clear()
+
+    for (const candidate of topN) {
+      const [bx, by, bw, bh] = candidate.detection.bbox
+      const crop = squareCropCanvas(rawCanvas, bx, by, bw, bh, 0.20, 224)
+
+      const embedding = await generateEmbedding(crop)
+      const matches = findBestMatches(embedding, this.storedEmbeddings)
+      const bestMatch = matches[0]
+
+      candidate.embeddingScore = bestMatch?.similarity ?? 0
+      candidate.prescored = true
+
+      // OCR score: only if the best-matching class matches the OCR hint
+      if (
+        bestMatch &&
+        this.ocrHintClassId !== null &&
+        bestMatch.classId === this.ocrHintClassId &&
+        this.ocrHintScore > 0
+      ) {
+        candidate.ocrScore = this.ocrHintScore
+      } else {
+        candidate.ocrScore = 0
+      }
+
+      const key = this.bboxKey(candidate.normBbox)
+      this.prescoredEmbeddings.set(key, embedding)
+    }
+  }
+
   // ── OCR (fire-and-forget, rate-limited) ───────────────────────────────────
 
   private async runOcrAsync(bbox: [number, number, number, number]): Promise<void> {
@@ -256,6 +346,9 @@ export class InferenceEngine {
     this.lastOcrText = null
     this.ocrBusy = false
     this.lastOcrTime = 0
+    this.prescoredEmbeddings.clear()
+    this.ocrHintClassId = null
+    this.ocrHintScore = 0
 
     const emitEmpty = (candidates: CandidateInfo[] = []) => {
       onFrame({
@@ -288,9 +381,8 @@ export class InferenceEngine {
         const vh = videoEl.videoHeight
         const size = Math.min(vw, vh)
         rawCtx.drawImage(videoEl, (vw - size) / 2, (vh - size) / 2, size, size, 0, 0, 224, 224)
-        const rawImageData = rawCtx.getImageData(0, 0, 224, 224)
 
-        // ── Multi-candidate COCO detection + ranking ──────────────────────
+        // ── Multi-candidate COCO detection + spatial ranking ──────────────
         const rawDetections = await detectAllObjects(rawCanvas)
         const ranked = rankCandidates(rawDetections, 224, 224)
 
@@ -300,9 +392,25 @@ export class InferenceEngine {
           this.lockedCandidate = null
           this.lockedFrames = 0
           this.weakSigFrames = 0
+          this.prescoredEmbeddings.clear()
           emitEmpty()
           this.rafId = requestAnimationFrame(loop)
           return
+        }
+
+        // ── Prescore: embed + OCR top candidates when useful ──────────────
+        const isLockStable = this.lockedCandidate !== null && this.weakSigFrames === 0
+        const atInterval = this.lockedFrames > 0 && this.lockedFrames % PRESCORE_INTERVAL === 0
+        const shouldPrescore =
+          this.mode === 'embeddings' &&
+          this.storedEmbeddings.length > 0 &&
+          ranked.length > 1 &&
+          (!isLockStable || atInterval)
+
+        if (shouldPrescore) {
+          const topN = ranked.slice(0, MAX_PRESCORE_CANDIDATES)
+          await this.prescoreTopCandidates(topN, rawCanvas)
+          rerankAfterPrescore(ranked)
         }
 
         // ── Temporal tracking: select winner ──────────────────────────────
@@ -330,7 +438,10 @@ export class InferenceEngine {
         let maxConf: number
 
         if (this.mode === 'embeddings' && this.storedEmbeddings.length > 0) {
-          const query = await generateEmbedding(cropCanvas)
+          // Reuse cached embedding from prescore if available
+          const key = this.bboxKey(selected.normBbox)
+          const cachedVec = this.prescoredEmbeddings.get(key)
+          const query = cachedVec ?? await generateEmbedding(cropCanvas)
           const matches = findBestMatches(query, this.storedEmbeddings)
           probs = this.classIds.map((id) => matches.find((m) => m.classId === id)?.similarity ?? 0)
           maxIdx = probs.indexOf(Math.max(...probs))
@@ -356,8 +467,6 @@ export class InferenceEngine {
         }
 
         // ── Embedding quality feedback for tracking ───────────────────────
-        // If the locked candidate consistently fails to match any class,
-        // release the lock so the ranker can try a different candidate next frame.
         if (this.mode === 'embeddings') {
           if (maxConf < WEAK_SIG_MIN) {
             this.weakSigFrames++
@@ -365,6 +474,7 @@ export class InferenceEngine {
               this.lockedCandidate = null
               this.lockedFrames = 0
               this.weakSigFrames = 0
+              this.prescoredEmbeddings.clear()
             }
           } else {
             this.weakSigFrames = 0
@@ -383,6 +493,9 @@ export class InferenceEngine {
           centerScore: c.centerScore,
           areaScore: c.areaScore,
           detectorScore: c.detectorScore,
+          embeddingScore: c.embeddingScore,
+          ocrScore: c.ocrScore,
+          prescored: c.prescored,
           finalScore: c.finalScore,
           isLocked: c === selected,
         }))
@@ -440,6 +553,9 @@ export class InferenceEngine {
     this.lastOcrText = null
     this.ocrBusy = false
     this.videoEl = null
+    this.prescoredEmbeddings.clear()
+    this.ocrHintClassId = null
+    this.ocrHintScore = 0
   }
 }
 

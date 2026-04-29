@@ -346,15 +346,23 @@ export default function InferencePage() {
                                     {Math.round(c.finalScore * 100)}
                                   </span>
                                 </div>
-                                <div className="flex gap-2 text-[9px] font-mono text-gray-700 pl-3.5">
+                                <div className="flex gap-2 text-[9px] font-mono text-gray-700 pl-3.5 flex-wrap">
                                   <span>C:{Math.round(c.centerScore * 100)}</span>
                                   <span>A:{Math.round(c.areaScore * 100)}</span>
                                   <span>D:{Math.round(c.detectorScore * 100)}</span>
+                                  {c.prescored && (
+                                    <>
+                                      <span className="text-blue-700">E:{Math.round(c.embeddingScore * 100)}</span>
+                                      {c.ocrScore > 0 && (
+                                        <span className="text-green-800">O:{Math.round(c.ocrScore * 100)}</span>
+                                      )}
+                                    </>
+                                  )}
                                 </div>
                               </div>
                             ))}
                             <p className="text-[9px] text-gray-800 pl-0.5">
-                              C=centro · A=área · D=detector · final=0.45C+0.35A+0.20D
+                              C=centro · A=área · D=detector · E=embedding · O=ocr
                             </p>
                           </div>
                         ) : (

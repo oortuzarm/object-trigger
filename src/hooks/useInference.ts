@@ -101,6 +101,9 @@ export function useInference(videoRef: React.RefObject<HTMLVideoElement>) {
         }
       }
 
+      // Propagate OCR hint to engine so next prescore cycle can boost matching candidates
+      inferenceEngine.setOcrHint(ocrMatchClassId, ocrMatch ? ocrScore : 0)
+
       setInferenceState({ currentDetection, debugPrediction, mode })
     },
     [classes, setInferenceState]

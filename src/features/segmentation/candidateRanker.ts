@@ -1,15 +1,21 @@
 /**
  * CANDIDATE RANKER — multi-object selection for inference.
  *
- * Scores each COCO-SSD detection by three independent signals:
+ * Scores each COCO-SSD detection by up to five signals:
  *
- *   centerScore   — Gaussian decay from frame center; rewards objects the user
- *                   is aiming at. Falls to ~0 near edges.
- *   areaScore     — relative bbox area; rewards foreground objects over tiny
- *                   background clutter. Capped at 1.0 (40% frame coverage).
- *   detectorScore — raw COCO confidence. Rewards certain detections.
+ *   centerScore     — Gaussian decay from frame center.
+ *   areaScore       — relative bbox area; rewards foreground objects.
+ *   detectorScore   — raw COCO confidence.
+ *   embeddingScore  — cosine similarity to stored embeddings (optional, set by engine).
+ *   ocrScore        — OCR keyword match score (optional, set by engine via hint).
  *
- * finalScore = 0.45 × centerScore + 0.35 × areaScore + 0.20 × detectorScore
+ * Initial spatial ranking (no embedding yet):
+ *   finalScore = 0.45 × center + 0.35 × area + 0.20 × detector
+ *
+ * After prescore (embedding + OCR assigned):
+ *   rerankAfterPrescore() recomputes with full weights:
+ *   finalScore = 0.30 × center + 0.25 × area + 0.15 × detector
+ *               + 0.20 × embedding + 0.10 × ocr
  *
  * Hard filters applied before scoring:
  *   • bbox area < 1.5% of frame area  → discarded (too small)
@@ -30,8 +36,23 @@ export interface ScoredCandidate {
   centerScore: number
   areaScore: number
   detectorScore: number
+  /** Cosine similarity to best-matching stored embedding (0 if not yet prescored). */
+  embeddingScore: number
+  /** OCR hint score for this candidate's best-matching class (0 if no hint or mismatch). */
+  ocrScore: number
+  /** True once the engine has assigned embeddingScore and ocrScore. */
+  prescored: boolean
   finalScore: number
 }
+
+// ── Score weights ─────────────────────────────────────────────────────────────
+
+export const SCORE_WEIGHTS = {
+  /** Used in initial spatial-only ranking (embedding + ocr not yet available). */
+  spatial: { center: 0.45, area: 0.35, detector: 0.20 },
+  /** Used in rerankAfterPrescore() when embedding + OCR are available. */
+  full: { center: 0.30, area: 0.25, detector: 0.15, embedding: 0.20, ocr: 0.10 },
+} as const
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -53,9 +74,9 @@ const AREA_SATURATION = 0.40
 // ── Scoring ───────────────────────────────────────────────────────────────────
 
 /**
- * Rank a list of raw COCO detections by how likely they are the object the
- * user intends to recognize. Returns a descending-sorted array (best first).
- * Empty if no detection passes the minimum filters.
+ * Rank a list of raw COCO detections by spatial signals only (fast, no embedding).
+ * Returns a descending-sorted array (best first).
+ * embeddingScore and ocrScore are initialized to 0; prescored to false.
  */
 export function rankCandidates(
   detections: RawDetection[],
@@ -95,10 +116,11 @@ export function rankCandidates(
 
     const detectorScore = det.score
 
+    const w = SCORE_WEIGHTS.spatial
     const finalScore =
-      0.45 * centerScore +
-      0.35 * areaScore +
-      0.20 * detectorScore
+      w.center * centerScore +
+      w.area * areaScore +
+      w.detector * detectorScore
 
     results.push({
       detection: det,
@@ -106,11 +128,32 @@ export function rankCandidates(
       centerScore,
       areaScore,
       detectorScore,
+      embeddingScore: 0,
+      ocrScore: 0,
+      prescored: false,
       finalScore,
     })
   }
 
   return results.sort((a, b) => b.finalScore - a.finalScore)
+}
+
+/**
+ * Recompute finalScore for each candidate using the full 5-signal weights
+ * (after the engine has assigned embeddingScore and ocrScore).
+ * Returns the same array sorted descending by the new finalScore.
+ */
+export function rerankAfterPrescore(candidates: ScoredCandidate[]): ScoredCandidate[] {
+  const w = SCORE_WEIGHTS.full
+  for (const c of candidates) {
+    c.finalScore =
+      w.center * c.centerScore +
+      w.area * c.areaScore +
+      w.detector * c.detectorScore +
+      w.embedding * c.embeddingScore +
+      w.ocr * c.ocrScore
+  }
+  return candidates.sort((a, b) => b.finalScore - a.finalScore)
 }
 
 // ── IoU (for temporal tracking continuity) ────────────────────────────────────
