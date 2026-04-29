@@ -34,7 +34,7 @@ export default function ConfigurePage() {
       ) : (
         <>
           <div className="mb-4 p-3 rounded-xl bg-gray-900/50 border border-gray-800 text-xs text-gray-500">
-            Toca una clase para expandir su configuración. Los cambios se guardan automáticamente.
+            Expande una clase para editar su configuración. Guarda los cambios antes de ejecutar la experiencia.
           </div>
           <div className="space-y-3">
             {classes.map((cls) => (

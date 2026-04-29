@@ -3,7 +3,14 @@ import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import { toast } from '@/components/ui/Toast'
 import { uploadAsset, removeAsset, ASSET_LABELS } from '@/features/assets/assetManager'
-import type { AssetType, ClassAsset, VideoAssetConfig, AudioAssetConfig, Model3DAssetConfig, UrlAssetConfig } from '@/types/class.types'
+import type {
+  AssetType,
+  ClassAsset,
+  VideoAssetConfig,
+  AudioAssetConfig,
+  Model3DAssetConfig,
+  UrlAssetConfig,
+} from '@/types/class.types'
 
 interface AssetUploaderProps {
   currentAsset: ClassAsset | null
@@ -20,6 +27,13 @@ const ACCEPT_MAP: Record<AssetType, string> = {
   url: '',
 }
 
+/** Extract blobId from any asset config, or null if type is 'url' / no asset. */
+function getBlobId(asset: ClassAsset | null | undefined): string | null {
+  if (!asset || asset.type === 'url') return null
+  const cfg = asset.config as unknown as Record<string, unknown>
+  return typeof cfg.blobId === 'string' ? cfg.blobId : null
+}
+
 export default function AssetUploader({ currentAsset, onAssetChange }: AssetUploaderProps) {
   const [selectedType, setSelectedType] = useState<AssetType>(currentAsset?.type ?? 'image')
   const [urlValue, setUrlValue] = useState(
@@ -29,15 +43,66 @@ export default function AssetUploader({ currentAsset, onAssetChange }: AssetUplo
     currentAsset?.type === 'url' ? (currentAsset.config as UrlAssetConfig).label : 'Ver más'
   )
   const [uploading, setUploading] = useState(false)
-  const [videoOpts, setVideoOpts] = useState<Omit<VideoAssetConfig, 'blobId'>>({ autoplay: true, loop: true, muted: true })
-  const [audioAutoplay, setAudioAutoplay] = useState(true)
-  const [autoRotate, setAutoRotate] = useState(true)
+
+  // ── Initialize options from the saved asset config, not hardcoded defaults ──
+  const [videoOpts, setVideoOpts] = useState<Omit<VideoAssetConfig, 'blobId'>>(() => {
+    if (currentAsset?.type === 'video') {
+      const c = currentAsset.config as VideoAssetConfig
+      return { autoplay: c.autoplay, loop: c.loop, muted: c.muted }
+    }
+    return { autoplay: true, loop: true, muted: true }
+  })
+  const [audioAutoplay, setAudioAutoplay] = useState<boolean>(() =>
+    currentAsset?.type === 'audio'
+      ? (currentAsset.config as AudioAssetConfig).autoplay
+      : true
+  )
+  const [autoRotate, setAutoRotate] = useState<boolean>(() =>
+    currentAsset?.type === 'model3d'
+      ? (currentAsset.config as Model3DAssetConfig).autoRotate
+      : true
+  )
+
   const fileRef = useRef<HTMLInputElement>(null)
 
-  const handleFileUpload = async (file: File) => {
-    if (currentAsset && 'blobId' in (currentAsset.config as unknown as Record<string, unknown>)) {
-      await removeAsset((currentAsset.config as unknown as { blobId: string }).blobId)
+  // ── Option change handlers — propagate to parent draft immediately ──────────
+
+  const handleVideoOptsChange = (patch: Partial<Omit<VideoAssetConfig, 'blobId'>>) => {
+    const updated = { ...videoOpts, ...patch }
+    setVideoOpts(updated)
+    // If a video file is already attached, update its config in the parent draft
+    if (currentAsset?.type === 'video') {
+      const blobId = (currentAsset.config as VideoAssetConfig).blobId
+      onAssetChange({ type: 'video', config: { blobId, ...updated } })
     }
+  }
+
+  const handleAudioAutoplayChange = (v: boolean) => {
+    setAudioAutoplay(v)
+    if (currentAsset?.type === 'audio') {
+      const blobId = (currentAsset.config as AudioAssetConfig).blobId
+      onAssetChange({ type: 'audio', config: { blobId, autoplay: v } })
+    }
+  }
+
+  const handleAutoRotateChange = (v: boolean) => {
+    setAutoRotate(v)
+    if (currentAsset?.type === 'model3d') {
+      const blobId = (currentAsset.config as Model3DAssetConfig).blobId
+      onAssetChange({ type: 'model3d', config: { blobId, autoRotate: v } })
+    }
+  }
+
+  // ── File upload ────────────────────────────────────────────────────────────
+
+  const handleFileUpload = async (file: File) => {
+    // Delete the current draft's blob immediately to avoid orphan blobs on
+    // consecutive uploads without saving (each new upload replaces the previous).
+    const existingBlobId = getBlobId(currentAsset)
+    if (existingBlobId) {
+      await removeAsset(existingBlobId)
+    }
+
     setUploading(true)
     try {
       const blobId = await uploadAsset(file)
@@ -63,13 +128,12 @@ export default function AssetUploader({ currentAsset, onAssetChange }: AssetUplo
       type: 'url',
       config: { url: urlValue.trim(), label: urlLabel.trim() || 'Ver más' },
     })
-    toast.success('URL guardada')
   }
 
-  const handleRemove = async () => {
-    if (currentAsset && 'blobId' in (currentAsset.config as unknown as Record<string, unknown>)) {
-      await removeAsset((currentAsset.config as unknown as { blobId: string }).blobId)
-    }
+  // ── Removal — blob deletion is deferred to save time in the parent ─────────
+  // The parent (ClassConfig.handleSave) compares old vs new blobId and deletes
+  // the orphan blob when the user clicks "Guardar cambios".
+  const handleRemove = () => {
     onAssetChange(null)
     toast.success('Asset eliminado')
   }
@@ -114,7 +178,7 @@ export default function AssetUploader({ currentAsset, onAssetChange }: AssetUplo
         </div>
       )}
 
-      {/* URL type — wrapped in form for Enter key support on mobile */}
+      {/* URL type */}
       {selectedType === 'url' ? (
         <form onSubmit={handleUrlSave} className="space-y-3">
           <div>
@@ -140,12 +204,12 @@ export default function AssetUploader({ currentAsset, onAssetChange }: AssetUplo
             />
           </div>
           <Button type="submit" size="sm" disabled={!urlValue.trim()}>
-            Guardar URL
+            Aplicar URL
           </Button>
         </form>
       ) : (
         <div className="space-y-3">
-          {/* Options per type */}
+          {/* Per-type options */}
           {selectedType === 'video' && (
             <div className="flex flex-wrap gap-3">
               {(['autoplay', 'loop', 'muted'] as const).map((opt) => (
@@ -153,7 +217,7 @@ export default function AssetUploader({ currentAsset, onAssetChange }: AssetUplo
                   <input
                     type="checkbox"
                     checked={videoOpts[opt]}
-                    onChange={(e) => setVideoOpts((v) => ({ ...v, [opt]: e.target.checked }))}
+                    onChange={(e) => handleVideoOptsChange({ [opt]: e.target.checked })}
                     className="accent-brand-500 w-4 h-4"
                   />
                   {opt.charAt(0).toUpperCase() + opt.slice(1)}
@@ -166,7 +230,7 @@ export default function AssetUploader({ currentAsset, onAssetChange }: AssetUplo
               <input
                 type="checkbox"
                 checked={audioAutoplay}
-                onChange={(e) => setAudioAutoplay(e.target.checked)}
+                onChange={(e) => handleAudioAutoplayChange(e.target.checked)}
                 className="accent-brand-500 w-4 h-4"
               />
               Autoplay al detectar
@@ -177,7 +241,7 @@ export default function AssetUploader({ currentAsset, onAssetChange }: AssetUplo
               <input
                 type="checkbox"
                 checked={autoRotate}
-                onChange={(e) => setAutoRotate(e.target.checked)}
+                onChange={(e) => handleAutoRotateChange(e.target.checked)}
                 className="accent-brand-500 w-4 h-4"
               />
               Auto-rotación

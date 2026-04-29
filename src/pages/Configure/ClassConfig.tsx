@@ -1,24 +1,79 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Card } from '@/components/ui/Card'
+import { Button } from '@/components/ui/Button'
 import AssetUploader from './AssetUploader'
 import { useClasses } from '@/hooks/useClasses'
+import { removeAsset } from '@/features/assets/assetManager'
 import type { ObjectClass, ClassAsset } from '@/types/class.types'
 
 interface ClassConfigProps {
   cls: ObjectClass
 }
 
+type SaveState = 'idle' | 'saving' | 'saved' | 'error'
+
+/** Returns the blobId from any file-based asset config (null for URL or no asset). */
+function getBlobId(asset: ClassAsset | null | undefined): string | null {
+  if (!asset || asset.type === 'url') return null
+  const cfg = asset.config as unknown as Record<string, unknown>
+  return typeof cfg.blobId === 'string' ? cfg.blobId : null
+}
+
 export default function ClassConfig({ cls }: ClassConfigProps) {
   const { updateClass } = useClasses()
   const [expanded, setExpanded] = useState(false)
 
-  const update = (partial: Partial<ObjectClass>) => {
-    updateClass({ ...cls, ...partial })
+  // ── Draft state ────────────────────────────────────────────────────────────
+  // All edits accumulate here. Nothing reaches IDB/Zustand until handleSave.
+  const [draft, setDraft] = useState<ObjectClass>(cls)
+  const [saveState, setSaveState] = useState<SaveState>('idle')
+  const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // When the user navigates to a different class (cls.id changes), reset the
+  // draft. We intentionally do NOT reset when cls data changes from external
+  // writes (e.g. sampleCount update) to preserve in-progress edits.
+  useEffect(() => {
+    setDraft(cls)
+    setSaveState('idle')
+  }, [cls.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Dirty detection ────────────────────────────────────────────────────────
+  const isDirty =
+    draft.showName !== cls.showName ||
+    draft.showConfidence !== cls.showConfidence ||
+    draft.confidenceThreshold !== cls.confidenceThreshold ||
+    (draft.keywords ?? []).join('\n') !== (cls.keywords ?? []).join('\n') ||
+    JSON.stringify(draft.asset) !== JSON.stringify(cls.asset)
+
+  const updateDraft = (partial: Partial<ObjectClass>) => {
+    setDraft((prev) => ({ ...prev, ...partial }))
+  }
+
+  // ── Save ───────────────────────────────────────────────────────────────────
+  const handleSave = async () => {
+    if (savedTimerRef.current) clearTimeout(savedTimerRef.current)
+    setSaveState('saving')
+    try {
+      // Delete the old blob if the asset was removed or replaced.
+      // This is deferred here (not in AssetUploader) so the blob is only
+      // deleted when the user confirms the change by saving.
+      const oldBlobId = getBlobId(cls.asset)
+      const newBlobId = getBlobId(draft.asset)
+      if (oldBlobId && oldBlobId !== newBlobId) {
+        try { await removeAsset(oldBlobId) } catch { /* non-fatal if already deleted */ }
+      }
+
+      await updateClass({ ...draft, updatedAt: Date.now() })
+      setSaveState('saved')
+      savedTimerRef.current = setTimeout(() => setSaveState('idle'), 2500)
+    } catch {
+      setSaveState('error')
+    }
   }
 
   return (
     <Card className="transition-all duration-200">
-      {/* Header row */}
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
       <button
         type="button"
         className="w-full flex items-center gap-3 text-left touch-manipulation"
@@ -31,7 +86,19 @@ export default function ClassConfig({ cls }: ClassConfigProps) {
           {cls.name[0].toUpperCase()}
         </div>
         <div className="flex-1 min-w-0">
-          <div className="font-semibold text-gray-200 text-sm">{cls.name}</div>
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="font-semibold text-gray-200 text-sm truncate">{cls.name}</span>
+            {isDirty && (
+              <span className="text-[9px] font-semibold text-yellow-600 bg-yellow-950/50 border border-yellow-900/40 px-1.5 py-0.5 rounded-full leading-none flex-shrink-0 whitespace-nowrap">
+                Sin guardar
+              </span>
+            )}
+            {!isDirty && saveState === 'saved' && (
+              <span className="text-[9px] font-semibold text-green-600 bg-green-950/50 border border-green-900/40 px-1.5 py-0.5 rounded-full leading-none flex-shrink-0">
+                Guardado ✓
+              </span>
+            )}
+          </div>
           <div className="text-xs text-gray-500">
             {cls.asset ? `Asset: ${cls.asset.type}` : 'Sin asset'} · Umbral:{' '}
             {Math.round(cls.confidenceThreshold * 100)}%
@@ -47,50 +114,52 @@ export default function ClassConfig({ cls }: ClassConfigProps) {
         </svg>
       </button>
 
+      {/* ── Expanded content ────────────────────────────────────────────────── */}
       {expanded && (
         <div className="mt-5 space-y-5 border-t border-gray-800 pt-5">
+
           {/* Overlay toggles */}
-          <div>
+          <section>
             <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
               Overlay
             </h4>
             <div className="space-y-3">
               <Toggle
                 label="Mostrar nombre"
-                checked={cls.showName}
-                onChange={(v) => update({ showName: v })}
+                checked={draft.showName}
+                onChange={(v) => updateDraft({ showName: v })}
               />
               <Toggle
                 label="Mostrar confianza"
-                checked={cls.showConfidence}
-                onChange={(v) => update({ showConfidence: v })}
+                checked={draft.showConfidence}
+                onChange={(v) => updateDraft({ showConfidence: v })}
               />
             </div>
-          </div>
+          </section>
 
           {/* Confidence threshold */}
-          <div>
+          <section>
             <label className="block text-xs font-medium text-gray-400 mb-2">
               Umbral de confianza:{' '}
-              <span className="font-mono text-gray-200">{Math.round(cls.confidenceThreshold * 100)}%</span>
+              <span className="font-mono text-gray-200">{Math.round(draft.confidenceThreshold * 100)}%</span>
             </label>
             <input
               type="range"
               min={0.3}
               max={0.99}
               step={0.01}
-              value={cls.confidenceThreshold}
-              onChange={(e) => update({ confidenceThreshold: Number(e.target.value) })}
+              value={draft.confidenceThreshold}
+              onChange={(e) => updateDraft({ confidenceThreshold: Number(e.target.value) })}
               className="w-full accent-brand-500"
             />
             <div className="flex justify-between text-xs text-gray-600 mt-1">
               <span>30% (sensible)</span>
               <span>99% (estricto)</span>
             </div>
-          </div>
+          </section>
 
           {/* OCR keywords */}
-          <div>
+          <section>
             <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">
               Palabras clave OCR
             </h4>
@@ -98,9 +167,9 @@ export default function ClassConfig({ cls }: ClassConfigProps) {
               Una por línea. Si el OCR lee estas palabras en la etiqueta, se refuerza la detección.
             </p>
             <textarea
-              value={(cls.keywords ?? []).join('\n')}
+              value={(draft.keywords ?? []).join('\n')}
               onChange={(e) =>
-                update({
+                updateDraft({
                   keywords: e.target.value
                     .split('\n')
                     .map((k) => k.trim())
@@ -111,23 +180,61 @@ export default function ClassConfig({ cls }: ClassConfigProps) {
               rows={3}
               className="w-full bg-gray-800 border border-gray-700 rounded-xl px-3 py-2.5 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-brand-500 resize-none font-mono"
             />
-          </div>
+          </section>
 
-          {/* Asset */}
-          <div>
+          {/* Asset — key ensures AssetUploader remounts when asset type changes,
+              re-reading options from the updated draft.asset */}
+          <section>
             <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
               Asset al detectar
             </h4>
             <AssetUploader
-              currentAsset={cls.asset}
-              onAssetChange={(asset: ClassAsset | null) => update({ asset })}
+              key={draft.asset?.type ?? 'none'}
+              currentAsset={draft.asset}
+              onAssetChange={(asset: ClassAsset | null) => updateDraft({ asset })}
             />
+          </section>
+
+          {/* ── Save bar ─────────────────────────────────────────────────────── */}
+          <div className="flex items-center justify-between gap-3 pt-3 border-t border-gray-800/60">
+            <span
+              className={[
+                'text-xs transition-opacity duration-200',
+                isDirty
+                  ? 'text-yellow-600 opacity-100'
+                  : saveState === 'saved'
+                    ? 'text-green-500 opacity-100'
+                    : saveState === 'error'
+                      ? 'text-red-500 opacity-100'
+                      : 'opacity-0 pointer-events-none',
+              ].join(' ')}
+            >
+              {isDirty
+                ? 'Cambios sin guardar'
+                : saveState === 'saved'
+                  ? 'Guardado correctamente'
+                  : saveState === 'error'
+                    ? 'Error al guardar — intenta de nuevo'
+                    : ' '}
+            </span>
+            <Button
+              size="sm"
+              loading={saveState === 'saving'}
+              disabled={!isDirty || saveState === 'saving'}
+              onClick={handleSave}
+              className="flex-shrink-0"
+            >
+              {saveState === 'saved' && !isDirty ? 'Guardado ✓' : 'Guardar cambios'}
+            </Button>
           </div>
+
         </div>
       )}
     </Card>
   )
 }
+
+// ── Toggle ────────────────────────────────────────────────────────────────────
 
 function Toggle({
   label,
