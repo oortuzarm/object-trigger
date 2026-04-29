@@ -6,6 +6,7 @@ import {
   deleteClass as deleteClassDB,
 } from '@/features/storage/classesStore'
 import { deleteSamplesByClass } from '@/features/storage/samplesStore'
+import { deleteEmbeddingsByClass } from '@/features/embeddings/embeddingStore'
 import { deleteAssetBlob } from '@/features/storage/assetsStore'
 import { deleteModel } from '@/features/storage/modelsStore'
 import type { ObjectClass } from '@/types/class.types'
@@ -47,6 +48,7 @@ export function useClasses() {
         await deleteAssetBlob(blobId)
       }
       await deleteSamplesByClass(id)
+      await deleteEmbeddingsByClass(id)
       await deleteClassDB(id)
 
       // If the deleted class was part of the trained model (or it's the last class),

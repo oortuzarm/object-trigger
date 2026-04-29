@@ -6,21 +6,19 @@ import { loadModel } from '@/features/storage/modelsStore'
 import { toast } from '@/components/ui/Toast'
 
 export function useInference(videoRef: React.RefObject<HTMLVideoElement>) {
-  const { classes, modelClassIds, setInferenceState, inferenceState } = useAppStore()
+  const { classes, setInferenceState, inferenceState } = useAppStore()
   const loadedRef = useRef(false)
 
   const handleFrame = useCallback(
     (frame: FrameResult) => {
-      const { stable, bestGuess, detection, cropThumbnail, cropMethod, requiredStreak } = frame
+      const { stable, bestGuess, detection, cropThumbnail, cropMethod, requiredStreak, mode } = frame
 
-      // ── No COCO-SSD detection → classifier never ran ──────────────────
-      // Clear both detection and debug so the UI shows "Buscando objeto..."
+      // No COCO-SSD detection → classifier/embeddings did not run
       if (!bestGuess || !detection) {
         setInferenceState({ currentDetection: null, debugPrediction: null })
         return
       }
 
-      // ── Debug prediction (COCO-SSD found something, classifier ran) ───
       const bestCls = classes.find((c) => c.id === bestGuess.classId)
       const debugPrediction = bestCls
         ? {
@@ -37,7 +35,6 @@ export function useInference(videoRef: React.RefObject<HTMLVideoElement>) {
           }
         : null
 
-      // ── Confirmed detection (streak met + above per-class threshold) ──
       let currentDetection = null
 
       if (stable) {
@@ -60,7 +57,7 @@ export function useInference(videoRef: React.RefObject<HTMLVideoElement>) {
         }
       }
 
-      setInferenceState({ currentDetection, debugPrediction })
+      setInferenceState({ currentDetection, debugPrediction, mode })
     },
     [classes, setInferenceState]
   )
@@ -68,19 +65,36 @@ export function useInference(videoRef: React.RefObject<HTMLVideoElement>) {
   const loadEngineIfNeeded = useCallback(async () => {
     if (loadedRef.current) return true
 
-    const stored = await loadModel()
-    if (!stored) {
-      toast.error('No hay modelo entrenado. Entrena primero.')
+    const currentClassIds = classes.map((c) => c.id)
+    if (currentClassIds.length === 0) {
+      toast.error('No hay clases definidas.')
       setInferenceState({ status: 'no_model' })
       return false
     }
 
-    console.log('[Inference] Cargando modelo — clases:', stored.classIds)
+    // ── Embeddings mode (preferred) ─────────────────────────────────────────
+    const hasEmbeddings = await inferenceEngine.tryLoadEmbeddings(currentClassIds)
+    if (hasEmbeddings) {
+      console.log('[Inference] Modo embeddings — %d vectores cargados', currentClassIds.length)
+      loadedRef.current = true
+      setInferenceState({ mode: 'embeddings' })
+      return true
+    }
+
+    // ── Classifier fallback ─────────────────────────────────────────────────
+    const stored = await loadModel()
+    if (!stored) {
+      toast.error('No hay embeddings ni modelo entrenado. Captura imágenes primero.')
+      setInferenceState({ status: 'no_model' })
+      return false
+    }
+
+    console.log('[Inference] Modo clasificador — clases:', stored.classIds)
     await inferenceEngine.load(stored.artifacts, stored.classIds)
-    console.log('[Inference] Modelo listo, clases actuales en store:', modelClassIds)
     loadedRef.current = true
+    setInferenceState({ mode: 'classifier' })
     return true
-  }, [setInferenceState, modelClassIds])
+  }, [classes, setInferenceState])
 
   const start = useCallback(async () => {
     const video = videoRef.current
@@ -89,7 +103,12 @@ export function useInference(videoRef: React.RefObject<HTMLVideoElement>) {
     const ready = await loadEngineIfNeeded()
     if (!ready) return
 
-    setInferenceState({ status: 'running', error: undefined, currentDetection: null, debugPrediction: null })
+    setInferenceState({
+      status: 'running',
+      error: undefined,
+      currentDetection: null,
+      debugPrediction: null,
+    })
     inferenceEngine.start(
       video,
       handleFrame,

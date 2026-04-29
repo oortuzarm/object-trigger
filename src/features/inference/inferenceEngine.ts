@@ -1,78 +1,113 @@
 /**
  * INFERENCE ENGINE
  *
- * Frame pipeline:
- *   1. Capture raw 224×224 square from video
- *   2. detectAndCrop() — COCO-SSD detects bounding box; saliency/center as fallback
- *   3. GATE: if COCO-SSD did not find an object (method !== 'cocoSsd'), reset
- *      the streak smoother and emit a "no detection" frame — classifier never runs.
- *   4. Canvas → tf.Tensor (no blob/bitmap roundtrip)
- *   5. MobileNet feature extraction
- *   6. Classifier predict → all class probabilities
- *   7. PredictionSmoother → stable detection OR best-guess debug data
+ * Two modes, selected at load time:
  *
- * The gate in step 3 is the key difference from a pure classifier: the model
- * will only produce a prediction when COCO-SSD confirms a real object in frame.
+ *   'embeddings' (primary)
+ *     COCO-SSD → crop → MobileNet embedding → cosine similarity search
+ *     against stored per-sample embeddings → stability tracking → result.
+ *     No trained classifier needed. Adding new samples updates the index
+ *     instantly with no re-training.
+ *
+ *   'classifier' (fallback)
+ *     COCO-SSD → crop → MobileNet features → trained Dense head → softmax.
+ *     Used when no embeddings exist in IDB.
+ *
+ * The FrameResult shape is identical in both modes:
+ *   stable.avgConfidence / bestGuess.confidence = similarity (0–1) in embedding
+ *   mode, softmax probability in classifier mode.
+ *   bestGuess.allProbs = per-class similarities or per-class softmax.
  */
 
 import * as tf from '@tensorflow/tfjs'
 import { loadFeatureExtractor } from '@/features/training/featureExtractor'
 import { deserializeModel } from '@/features/training/modelSerializer'
 import { PredictionSmoother, REQUIRED_STREAK } from './predictionSmoothing'
-import {
-  detectAndCrop,
-  preloadDetector,
-} from '@/features/segmentation/objectCropper'
+import { detectAndCrop, preloadDetector } from '@/features/segmentation/objectCropper'
+import { getAllEmbeddings } from '@/features/embeddings/embeddingStore'
+import { generateEmbedding } from '@/features/embeddings/embeddingEngine'
+import { findBestMatches } from '@/features/embeddings/similaritySearch'
+import type { StoredEmbeddingRecord } from '@/features/embeddings/embeddingStore'
+
+export type InferenceMode = 'embeddings' | 'classifier'
 
 export interface DetectionInfo {
-  /** Normalized [x, y, w, h] 0-1 relative to the captured 224×224 frame. */
   bbox: [number, number, number, number]
-  /** COCO-SSD confidence score 0-1. */
   score: number
-  /** COCO class name (e.g. "bottle", "person"). */
   label: string
 }
 
 export interface FrameResult {
-  /** Non-null only when streak + confidence floor are both met. */
   stable: { classId: string; avgConfidence: number; streak: number } | null
-  /**
-   * Always set when COCO-SSD found an object (even before streak is met).
-   * null when no object was detected → classifier did not run.
-   */
   bestGuess: { classId: string; confidence: number; streak: number; allProbs: number[] } | null
-  /** COCO-SSD detection result. null when no object found. */
   detection: DetectionInfo | null
-  /** JPEG data-URL of the 224×224 crop actually sent to the classifier. null when no detection. */
   cropThumbnail: string | null
   cropMethod: string
   requiredStreak: number
+  mode: InferenceMode
 }
 
 export class InferenceEngine {
   private model: tf.LayersModel | null = null
   private extractor: Awaited<ReturnType<typeof loadFeatureExtractor>> | null = null
   private classIds: string[] = []
+  private storedEmbeddings: StoredEmbeddingRecord[] = []
+  private mode: InferenceMode = 'classifier'
   private smoother = new PredictionSmoother()
   private rafId: number | null = null
   private frameCount = 0
   private lastFpsTime = 0
 
-  async load(
-    artifacts: unknown,
-    classIds: string[],
-    onReady?: () => void
-  ): Promise<void> {
-    this.classIds = classIds
+  // ── Loading ──────────────────────────────────────────────────────────────
 
+  /**
+   * Primary load path: embeddings mode.
+   * Returns true if at least one embedding was found for the given classIds.
+   * Also preloads COCO-SSD and the MobileNet extractor.
+   */
+  async tryLoadEmbeddings(classIds: string[]): Promise<boolean> {
+    this.classIds = classIds
+    const [extractor, all] = await Promise.all([
+      loadFeatureExtractor(),
+      getAllEmbeddings(),
+      preloadDetector(),
+    ])
+    this.extractor = extractor
+    this.storedEmbeddings = all.filter((e) => classIds.includes(e.classId))
+    if (this.storedEmbeddings.length > 0) {
+      this.mode = 'embeddings'
+      return true
+    }
+    return false
+  }
+
+  /**
+   * Fallback load path: classifier mode.
+   * Deserializes the Dense head from IDB artifacts.
+   */
+  async load(artifacts: unknown, classIds: string[]): Promise<void> {
+    this.classIds = classIds
     const [extractor] = await Promise.all([
       loadFeatureExtractor(),
       preloadDetector(),
     ])
     this.extractor = extractor
     this.model = await deserializeModel(artifacts)
-    onReady?.()
+    this.mode = 'classifier'
   }
+
+  /** Reload embeddings in-place (called after new captures without restarting inference). */
+  async refreshEmbeddings(): Promise<void> {
+    if (this.mode !== 'embeddings') return
+    const all = await getAllEmbeddings()
+    this.storedEmbeddings = all.filter((e) => this.classIds.includes(e.classId))
+  }
+
+  get currentMode(): InferenceMode {
+    return this.mode
+  }
+
+  // ── Frame loop ───────────────────────────────────────────────────────────
 
   start(
     videoEl: HTMLVideoElement,
@@ -84,13 +119,13 @@ export class InferenceEngine {
     this.smoother.reset()
 
     const loop = async () => {
-      if (!this.model || !this.extractor || videoEl.readyState < 2) {
+      if (!this.extractor || videoEl.readyState < 2) {
         this.rafId = requestAnimationFrame(loop)
         return
       }
 
       try {
-        // ── Step 1: Capture raw 224×224 center-square from video ─────────
+        // ── Capture 224×224 center-square ─────────────────────────────
         const rawCanvas = document.createElement('canvas')
         rawCanvas.width = 224
         rawCanvas.height = 224
@@ -101,11 +136,11 @@ export class InferenceEngine {
         rawCtx.drawImage(videoEl, (vw - size) / 2, (vh - size) / 2, size, size, 0, 0, 224, 224)
         const rawImageData = rawCtx.getImageData(0, 0, 224, 224)
 
-        // ── Step 2: COCO-SSD detection + crop ────────────────────────────
+        // ── COCO-SSD detection + crop ─────────────────────────────────
         const cropResult = await detectAndCrop(rawImageData)
         const { cropInfo } = cropResult
 
-        // ── Step 3: GATE — skip classifier when no real object detected ──
+        // ── Gate: no real object → skip classification ────────────────
         if (cropInfo.method !== 'cocoSsd') {
           this.smoother.reset()
           onFrame({
@@ -115,6 +150,7 @@ export class InferenceEngine {
             cropThumbnail: null,
             cropMethod: cropInfo.method,
             requiredStreak: REQUIRED_STREAK,
+            mode: this.mode,
           })
           this.rafId = requestAnimationFrame(loop)
           return
@@ -126,39 +162,49 @@ export class InferenceEngine {
           label: cropInfo.label ?? '',
         }
 
-        // ── Step 4: Canvas → tensor ───────────────────────────────────────
+        // Build crop canvas (shared by both paths)
         const cropCanvas = document.createElement('canvas')
         cropCanvas.width = 224
         cropCanvas.height = 224
         cropCanvas.getContext('2d')!.putImageData(cropResult.imageData, 0, 0)
 
-        const tensor = tf.tidy(() =>
-          (tf.browser.fromPixels(cropCanvas) as tf.Tensor3D)
-            .expandDims(0)
-            .toFloat()
-            .div(255)
-        )
+        let probs: number[]
+        let maxIdx: number
+        let maxConf: number
 
-        // ── Step 5: Feature extraction ────────────────────────────────────
-        const embeddings = this.extractor.infer(
-          tensor as tf.Tensor<tf.Rank>,
-          true
-        ) as tf.Tensor
-        const features = Array.from((await embeddings.data()) as Float32Array)
-        tf.dispose([tensor, embeddings])
+        if (this.mode === 'embeddings' && this.storedEmbeddings.length > 0) {
+          // ── Embeddings path ─────────────────────────────────────────
+          const query = await generateEmbedding(cropCanvas)
+          const matches = findBestMatches(query, this.storedEmbeddings)
 
-        // ── Step 6: Classify ──────────────────────────────────────────────
-        const input = tf.tensor2d([features])
-        const output = this.model.predict(input) as tf.Tensor
-        const probs = Array.from((await output.data()) as Float32Array)
-        tf.dispose([input, output])
+          // Map to per-class array in classIds order
+          probs = this.classIds.map((id) => matches.find((m) => m.classId === id)?.similarity ?? 0)
+          maxIdx = probs.indexOf(Math.max(...probs))
+          maxConf = probs[maxIdx]
+        } else if (this.model) {
+          // ── Classifier path (fallback) ──────────────────────────────
+          const tensor = tf.tidy(() =>
+            (tf.browser.fromPixels(cropCanvas) as tf.Tensor3D).expandDims(0).toFloat().div(255)
+          )
+          const embeddings = this.extractor.infer(tensor as tf.Tensor<tf.Rank>, true) as tf.Tensor
+          const features = Array.from((await embeddings.data()) as Float32Array)
+          tf.dispose([tensor, embeddings])
 
-        // ── Step 7: Stability tracking ────────────────────────────────────
-        const maxIdx = probs.indexOf(Math.max(...probs))
-        const maxConf = probs[maxIdx]
+          const input = tf.tensor2d([features])
+          const output = this.model.predict(input) as tf.Tensor
+          probs = Array.from((await output.data()) as Float32Array)
+          tf.dispose([input, output])
 
+          maxIdx = probs.indexOf(Math.max(...probs))
+          maxConf = probs[maxIdx]
+        } else {
+          // No mode available
+          this.rafId = requestAnimationFrame(loop)
+          return
+        }
+
+        // ── Stability tracking (shared) ─────────────────────────────
         this.smoother.push(maxIdx, maxConf, probs)
-
         const stable = this.smoother.getStable()
         const bestGuess = this.smoother.getBestGuess()!
 
@@ -176,9 +222,10 @@ export class InferenceEngine {
           cropThumbnail: cropResult.thumbnail,
           cropMethod: cropInfo.method,
           requiredStreak: REQUIRED_STREAK,
+          mode: this.mode,
         })
 
-        // FPS
+        // FPS counter
         this.frameCount++
         const now = Date.now()
         if (now - this.lastFpsTime >= 1000) {
@@ -208,7 +255,7 @@ export class InferenceEngine {
   }
 
   isLoaded() {
-    return this.model !== null && this.extractor !== null
+    return this.extractor !== null && (this.storedEmbeddings.length > 0 || this.model !== null)
   }
 }
 

@@ -4,7 +4,14 @@ import type { TrainingSample } from '@/types/sample.types'
 import type { Project } from '@/types/project.types'
 
 export const DB_NAME = 'object-trigger'
-export const DB_VERSION = 1
+export const DB_VERSION = 2
+
+export interface StoredEmbeddingRecord {
+  id: string        // same as the sample id it was derived from
+  classId: string
+  vector: number[]  // 1024-dim L2-normalized MobileNet embedding
+  capturedAt: number
+}
 
 export interface DBSchema {
   classes: {
@@ -27,6 +34,11 @@ export interface DBSchema {
   projects: {
     key: string
     value: Project
+  }
+  embeddings: {
+    key: string
+    value: StoredEmbeddingRecord
+    indexes: { 'by-class': string }
   }
 }
 
@@ -51,6 +63,11 @@ export function getDB(): Promise<IDBPDatabase<DBSchema>> {
         }
         if (!db.objectStoreNames.contains('projects')) {
           db.createObjectStore('projects', { keyPath: 'id' })
+        }
+        // v2: per-sample embeddings for classifier-free similarity search
+        if (!db.objectStoreNames.contains('embeddings')) {
+          const store = db.createObjectStore('embeddings', { keyPath: 'id' })
+          store.createIndex('by-class', 'classId')
         }
       },
     })

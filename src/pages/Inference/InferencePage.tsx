@@ -11,10 +11,12 @@ import { Card } from '@/components/ui/Card'
 
 export default function InferencePage() {
   const navigate = useNavigate()
-  const { modelStatus, classes, modelClassIds } = useAppStore()
+  const { modelStatus, classes, modelClassIds, embeddingCountByClass } = useAppStore()
   const camera = useCamera()
   const { inferenceState, start, stop } = useInference(camera.videoRef)
   const [showDebug, setShowDebug] = useState(false)
+
+  const hasEmbeddings = Object.values(embeddingCountByClass).some((count) => count > 0)
 
   useEffect(() => {
     camera.start()
@@ -24,22 +26,22 @@ export default function InferencePage() {
     }
   }, [])
 
-  if (modelStatus !== 'ready') {
+  if (modelStatus !== 'ready' && !hasEmbeddings) {
     return (
       <div className="p-4 sm:p-6 max-w-lg mx-auto text-center pt-16 sm:pt-20">
         <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-gray-800 flex items-center justify-center mx-auto mb-4 text-3xl">
           ⚡
         </div>
-        <h2 className="text-lg font-semibold text-gray-200 mb-2">Sin modelo entrenado</h2>
+        <h2 className="text-lg font-semibold text-gray-200 mb-2">Sin datos de reconocimiento</h2>
         <p className="text-sm text-gray-500 mb-6">
-          Necesitas entrenar un modelo antes de poder reconocer objetos.
+          Captura imágenes en cada clase para generar embeddings, o entrena un clasificador.
         </p>
         <div className="flex flex-col sm:flex-row gap-3 justify-center">
           <Button onClick={() => navigate('/classes')} variant="secondary" className="w-full sm:w-auto">
             Crear clases
           </Button>
           <Button onClick={() => navigate('/training')} className="w-full sm:w-auto">
-            Ir a entrenamiento
+            Ver estado
           </Button>
         </div>
       </div>
@@ -50,10 +52,14 @@ export default function InferencePage() {
   const debug = inferenceState.debugPrediction
   const activeCls = det ? classes.find((c) => c.id === det.classId) : null
   const isRunning = inferenceState.status === 'running'
+  const isEmbeddingsMode = inferenceState.mode === 'embeddings'
 
-  // ── Derived values for classifier panel ──────────────────────────────────
+  // In embeddings mode allProbs maps to classes.map(c=>c.id) order;
+  // in classifier mode it maps to modelClassIds order.
+  const classIdList = isEmbeddingsMode ? classes.map((c) => c.id) : modelClassIds
+
   const sortedProbs = debug?.allProbabilities
-    ? modelClassIds
+    ? classIdList
         .map((id, idx) => ({ id, prob: debug.allProbabilities![idx] ?? 0 }))
         .sort((a, b) => b.prob - a.prob)
     : []
@@ -73,15 +79,19 @@ export default function InferencePage() {
 
   const streakPct = debug ? Math.min(100, (debug.streakFrames / debug.requiredFrames) * 100) : 0
 
+  const confidenceLabel = isEmbeddingsMode ? 'similitud' : 'confianza'
+  const classCount = isEmbeddingsMode ? classes.length : modelClassIds.length
+  const classCountLabel = isEmbeddingsMode
+    ? `${classCount} clase${classCount !== 1 ? 's' : ''} con embeddings`
+    : `${classCount} clase${classCount !== 1 ? 's' : ''} entrenadas`
+
   return (
     <div className="p-4 sm:p-6 max-w-6xl mx-auto">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
         <div>
           <h1 className="text-lg sm:text-xl font-bold text-gray-100">Reconocimiento en vivo</h1>
-          <p className="text-xs sm:text-sm text-gray-500">
-            {modelClassIds.length} clase{modelClassIds.length !== 1 ? 's' : ''} entrenadas
-          </p>
+          <p className="text-xs sm:text-sm text-gray-500">{classCountLabel}</p>
         </div>
         <InferenceControls inferenceState={inferenceState} onStart={start} onStop={stop} />
       </div>
@@ -142,7 +152,7 @@ export default function InferencePage() {
                     </div>
                     <div className="font-bold text-gray-100 text-base truncate">{det.className}</div>
                     <div className="text-xs text-gray-400 mt-0.5">
-                      {Math.round(det.confidence * 100)}% confianza
+                      {Math.round(det.confidence * 100)}% {confidenceLabel}
                     </div>
                   </div>
                   <span className="text-green-400 text-2xl flex-shrink-0 mt-0.5">✓</span>
@@ -214,11 +224,11 @@ export default function InferencePage() {
             )}
           </Card>
 
-          {/* ── CLASES ENTRENADAS — probabilidades en tiempo real ────── */}
+          {/* ── SIMILITUD / CONFIANZA por clase ─────────────────────── */}
           {isRunning && debug && (
             <Card>
               <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2.5">
-                Clases entrenadas
+                {isEmbeddingsMode ? 'Similitud por clase' : 'Confianza por clase'}
               </h3>
               <div className="space-y-2">
                 {sortedProbs.map(({ id, prob }, rank) => {
@@ -290,6 +300,19 @@ export default function InferencePage() {
               {showDebug && (
                 <div className="mt-1 p-3 rounded-xl border border-gray-800 bg-gray-950/50 space-y-3">
 
+                  {/* Mode indicator */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-semibold text-gray-600 uppercase tracking-wider">Modo:</span>
+                    <span className={[
+                      'text-[10px] font-mono px-1.5 py-0.5 rounded',
+                      isEmbeddingsMode
+                        ? 'text-blue-400 bg-blue-950/40'
+                        : 'text-purple-400 bg-purple-950/40',
+                    ].join(' ')}>
+                      {isEmbeddingsMode ? 'embeddings (similitud coseno)' : 'clasificador (softmax)'}
+                    </span>
+                  </div>
+
                   {debug ? (
                     <>
                       {/* COCO-SSD info */}
@@ -308,14 +331,16 @@ export default function InferencePage() {
                           </div>
                         </div>
                         <p className="text-[9px] text-gray-700 mt-1">
-                          Este label sirve solo para obtener el bbox/crop. No es una clase entrenada.
+                          Sirve solo para obtener el bbox/crop. No es una clase entrenada.
                         </p>
                       </div>
 
                       {/* Crop thumbnail */}
                       {debug.cropThumbnail && (
                         <div>
-                          <p className="text-[10px] text-gray-600 mb-1">Recorte enviado al clasificador:</p>
+                          <p className="text-[10px] text-gray-600 mb-1">
+                            Recorte enviado al {isEmbeddingsMode ? 'embedder' : 'clasificador'}:
+                          </p>
                           <img
                             src={debug.cropThumbnail}
                             alt="crop"

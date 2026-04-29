@@ -12,11 +12,15 @@ interface AppState {
   upsertClass: (cls: ObjectClass) => void
   removeClass: (id: string) => void
 
-  // Model state
+  // Classifier model state
   modelStatus: ModelStatus
   modelClassIds: string[]
   setModelReady: (classIds: string[]) => void
   clearModel: () => void
+
+  // Embedding index counts (classId → number of stored embeddings)
+  embeddingCountByClass: Record<string, number>
+  setEmbeddingCounts: (counts: Record<string, number>) => void
 
   // Training
   trainingProgress: TrainingProgress | null
@@ -44,9 +48,6 @@ export const useAppStore = create<AppState>((set) => ({
       }
       return { classes: [...state.classes, cls] }
     }),
-  // Atomically removes the class and updates model validity.
-  // - Deleting the last class → not_trained (no classes means no valid model)
-  // - Deleting a class that was part of the trained model → outdated
   removeClass: (id) =>
     set((state) => {
       const newClasses = state.classes.filter((c) => c.id !== id)
@@ -59,13 +60,23 @@ export const useAppStore = create<AppState>((set) => ({
         modelStatus = 'outdated'
       }
 
-      return { classes: newClasses, modelStatus, modelClassIds }
+      // Remove embedding count for this class
+      const embeddingCountByClass = { ...state.embeddingCountByClass }
+      delete embeddingCountByClass[id]
+
+      return { classes: newClasses, modelStatus, modelClassIds, embeddingCountByClass }
     }),
 
   modelStatus: 'not_trained',
   modelClassIds: [],
   setModelReady: (classIds) => set({ modelStatus: 'ready', modelClassIds: classIds }),
   clearModel: () => set({ modelStatus: 'not_trained', modelClassIds: [] }),
+
+  embeddingCountByClass: {},
+  setEmbeddingCounts: (counts) =>
+    set((state) => ({
+      embeddingCountByClass: { ...state.embeddingCountByClass, ...counts },
+    })),
 
   trainingProgress: null,
   setTrainingProgress: (progress) => set({ trainingProgress: progress }),
@@ -74,6 +85,7 @@ export const useAppStore = create<AppState>((set) => ({
     status: 'idle',
     currentDetection: null,
     debugPrediction: null,
+    mode: 'embeddings',
     fps: 0,
   },
   setInferenceState: (partial) =>
