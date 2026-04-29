@@ -150,8 +150,12 @@ export default function InferencePage() {
             error={camera.state.error}
             onFlip={camera.flip}
             className="w-full aspect-[4/3] sm:aspect-video"
-          />
-          {isRunning && <DetectionOverlay />}
+          >
+            {/* Overlay is rendered INSIDE CameraView so:
+                - absolute positioning is relative to the camera bounds
+                - CameraView's overflow:hidden clips any edge cases           */}
+            {isRunning && <DetectionOverlay videoRef={camera.videoRef} />}
+          </CameraView>
         </div>
 
         {/* ── Side panel ──────────────────────────────────────────────────────── */}

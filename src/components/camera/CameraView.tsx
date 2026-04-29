@@ -5,10 +5,13 @@ interface CameraViewProps {
   error: string | null
   onFlip?: () => void
   className?: string
+  /** Content rendered inside the camera container (e.g. DetectionOverlay).
+   *  Positioned relative to the camera bounds; clipped by overflow: hidden. */
+  children?: React.ReactNode
 }
 
 const CameraView = forwardRef<HTMLVideoElement, CameraViewProps>(
-  ({ isActive, error, onFlip, className = '' }, ref) => {
+  ({ isActive, error, onFlip, className = '', children }, ref) => {
     return (
       <div className={['relative bg-gray-900 rounded-2xl overflow-hidden', className].join(' ')}>
         <video
@@ -22,9 +25,12 @@ const CameraView = forwardRef<HTMLVideoElement, CameraViewProps>(
           ].join(' ')}
         />
 
+        {/* Overlay children — always after <video> so they appear on top */}
+        {children}
+
         {/* Placeholder when not active */}
         {!isActive && !error && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-600">
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-600 pointer-events-none">
             <svg className="w-12 h-12 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.069A1 1 0 0121 8.82v6.36a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
             </svg>
@@ -34,7 +40,7 @@ const CameraView = forwardRef<HTMLVideoElement, CameraViewProps>(
 
         {/* Error */}
         {error && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-red-950/20 text-red-400 p-4 text-center">
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-red-950/20 text-red-400 p-4 text-center pointer-events-none">
             <svg className="w-8 h-8 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
             </svg>
@@ -43,7 +49,7 @@ const CameraView = forwardRef<HTMLVideoElement, CameraViewProps>(
           </div>
         )}
 
-        {/* Frame guide overlay */}
+        {/* Frame guide — corners only */}
         {isActive && (
           <div className="absolute inset-0 pointer-events-none">
             <div className="absolute inset-4 border border-white/10 rounded-xl">
