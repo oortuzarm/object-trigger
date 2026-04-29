@@ -71,7 +71,7 @@ export function isDetectorReady(): boolean {
 export async function detectAndCrop(
   imageData: ImageData,
   targetSize = 224,
-  padding = 0.14
+  padding = 0.20
 ): Promise<CropResult> {
   const srcCanvas = imageDataToCanvas(imageData)
 

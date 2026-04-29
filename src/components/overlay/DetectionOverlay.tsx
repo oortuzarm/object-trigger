@@ -25,13 +25,13 @@ export default function DetectionOverlay() {
     }
   }, [currentDetection, cls])
 
-  // Bounding box — show whenever COCO-SSD has a detection (even before confirmation)
+  // Bbox from current confirmed detection OR live debug frame
   const bbox = currentDetection?.detectionBbox ?? debugPrediction?.detectionBbox ?? null
   const isConfirmed = !!currentDetection && !!cls
 
   return (
     <>
-      {/* ── COCO-SSD bounding box ────────────────────────────────────── */}
+      {/* ── Bounding box — visual guide only, no COCO label ──────────── */}
       {bbox && (
         <div
           className="absolute pointer-events-none z-10 rounded"
@@ -40,28 +40,12 @@ export default function DetectionOverlay() {
             top: `${bbox[1] * 100}%`,
             width: `${bbox[2] * 100}%`,
             height: `${bbox[3] * 100}%`,
-            border: `2px solid ${isConfirmed ? (cls?.color ?? '#22c55e') : 'rgba(234,179,8,0.7)'}`,
-            boxShadow: isConfirmed
-              ? `0 0 0 1px ${cls?.color ?? '#22c55e'}33`
-              : '0 0 0 1px rgba(234,179,8,0.2)',
+            border: `2px solid ${isConfirmed ? (cls?.color ?? '#22c55e') : 'rgba(234,179,8,0.55)'}`,
           }}
-        >
-          {/* Score badge on bbox corner */}
-          <span
-            className="absolute -top-5 left-0 text-[10px] font-mono px-1 rounded-sm leading-4"
-            style={{
-              backgroundColor: isConfirmed ? (cls?.color ?? '#22c55e') + 'cc' : 'rgba(234,179,8,0.75)',
-              color: '#000',
-            }}
-          >
-            {debugPrediction?.detectionLabel ?? currentDetection?.detectionLabel ?? ''}
-            {' '}
-            {Math.round((debugPrediction?.detectionScore ?? currentDetection?.detectionScore ?? 0) * 100)}%
-          </span>
-        </div>
+        />
       )}
 
-      {/* ── Confirmed label — top-left of the camera container ──────── */}
+      {/* ── Confirmed label (custom class only) ────────────────────── */}
       {visible && cls && currentDetection && (
         <div className="absolute top-4 left-4 z-20 animate-fade-in">
           <DetectionLabel
