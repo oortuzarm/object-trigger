@@ -21,12 +21,15 @@ export default function TrainingPage() {
   const isRunning =
     trainingProgress?.status === 'extracting_features' ||
     trainingProgress?.status === 'training' ||
-    trainingProgress?.status === 'saving'
+    trainingProgress?.status === 'saving' ||
+    trainingProgress?.status === 'evaluating'
 
   const epochProgress =
     trainingProgress && trainingProgress.totalEpochs > 0
       ? (trainingProgress.currentEpoch / trainingProgress.totalEpochs) * 100
       : 0
+
+  const perClassAccuracy = trainingProgress?.perClassAccuracy
 
   return (
     <div className="p-4 sm:p-6 max-w-3xl mx-auto">
@@ -34,7 +37,7 @@ export default function TrainingPage() {
         <div>
           <h1 className="text-xl font-bold text-gray-100">Entrenamiento</h1>
           <p className="text-xs sm:text-sm text-gray-500 mt-0.5">
-            Transfer learning en el navegador
+            Transfer learning en el navegador · augmentación automática (4×)
           </p>
         </div>
         {modelStatus === 'ready' && (
@@ -54,11 +57,12 @@ export default function TrainingPage() {
         <h2 className="text-sm font-semibold text-gray-400 mb-3">Resumen del dataset</h2>
         <div className="grid grid-cols-3 gap-2 sm:gap-4">
           <SummaryItem label="Clases" value={classes.length} min={2} />
-          <SummaryItem label="Muestras" value={totalSamples} min={20} />
+          <SummaryItem label="Muestras orig." value={totalSamples} min={20} />
           <SummaryItem
-            label="Promedio"
-            value={classes.length > 0 ? Math.round(totalSamples / classes.length) : 0}
-            min={10}
+            label="Con augmentación"
+            value={totalSamples * 4}
+            min={40}
+            note="4×"
           />
         </div>
         {!canTrain && (
@@ -91,6 +95,9 @@ export default function TrainingPage() {
               onChange={(v) => setConfig((c) => ({ ...c, batchSize: v }))}
             />
           </div>
+          <p className="text-[10px] text-gray-600 mt-3">
+            Más épocas mejoran la precisión pero pueden causar sobreajuste. Con augmentación activa, 20–40 épocas es suficiente para la mayoría de los casos.
+          </p>
         </Card>
       )}
 
@@ -111,9 +118,11 @@ export default function TrainingPage() {
               className="flex-shrink-0"
             >
               {trainingProgress.status === 'extracting_features'
-                ? 'Features'
+                ? 'Extrayendo features'
                 : trainingProgress.status === 'training'
                 ? 'Entrenando'
+                : trainingProgress.status === 'evaluating'
+                ? 'Evaluando'
                 : trainingProgress.status === 'saving'
                 ? 'Guardando'
                 : trainingProgress.status === 'done'
@@ -137,6 +146,70 @@ export default function TrainingPage() {
 
           <div className="mt-4">
             <TrainingMetrics metrics={trainingProgress.metrics} totalEpochs={config.epochs} />
+          </div>
+        </Card>
+      )}
+
+      {/* Per-class accuracy — shown after training completes */}
+      {trainingProgress?.status === 'done' && perClassAccuracy && perClassAccuracy.length > 0 && (
+        <Card className="mb-4">
+          <h2 className="text-sm font-semibold text-gray-400 mb-1">Precisión por clase</h2>
+          <p className="text-[10px] text-gray-600 mb-3">
+            Medida sobre muestras originales (sin augmentación). Clases con precisión baja necesitan más muestras o mayor variedad.
+          </p>
+          <div className="space-y-3">
+            {perClassAccuracy.map(({ classId, correct, total }) => {
+              const cls = classes.find((c) => c.id === classId)
+              const acc = total > 0 ? correct / total : 0
+              const pct = Math.round(acc * 100)
+              const good = acc >= 0.8
+              const warn = acc >= 0.6 && acc < 0.8
+
+              return (
+                <div key={classId} className="space-y-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      {cls && (
+                        <span
+                          className="w-2 h-2 rounded-full flex-shrink-0"
+                          style={{ backgroundColor: cls.color }}
+                        />
+                      )}
+                      <span className="text-sm text-gray-300 truncate">
+                        {cls?.name ?? classId}
+                      </span>
+                      <span className="text-xs text-gray-600 flex-shrink-0">
+                        {correct}/{total} correctas
+                      </span>
+                    </div>
+                    <span
+                      className={[
+                        'text-sm font-mono font-bold flex-shrink-0',
+                        good ? 'text-green-400' : warn ? 'text-yellow-400' : 'text-red-400',
+                      ].join(' ')}
+                    >
+                      {pct}%
+                    </span>
+                  </div>
+                  <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all duration-500"
+                      style={{
+                        width: `${pct}%`,
+                        backgroundColor: good ? '#22c55e' : warn ? '#eab308' : '#ef4444',
+                      }}
+                    />
+                  </div>
+                  {!good && (
+                    <p className="text-[10px] text-gray-600">
+                      {acc < 0.6
+                        ? 'Precisión baja — captura más muestras con variedad de ángulos, distancias e iluminación.'
+                        : 'Precisión moderada — agrega algunas muestras adicionales para mejorar.'}
+                    </p>
+                  )}
+                </div>
+              )
+            })}
           </div>
         </Card>
       )}
@@ -168,12 +241,13 @@ export default function TrainingPage() {
   )
 }
 
-function SummaryItem({ label, value, min }: { label: string; value: number; min: number }) {
+function SummaryItem({ label, value, min, note }: { label: string; value: number; min: number; note?: string }) {
   const ok = value >= min
   return (
     <div className="text-center p-2 sm:p-3 bg-gray-950 rounded-xl border border-gray-800">
       <div className={['text-lg sm:text-xl font-bold font-mono', ok ? 'text-gray-100' : 'text-red-400'].join(' ')}>
         {value}
+        {note && <span className="text-xs text-gray-500 ml-1">{note}</span>}
       </div>
       <div className="text-[10px] sm:text-xs text-gray-500 mt-0.5 leading-tight">{label}</div>
       {!ok && <div className="text-[10px] text-red-500 mt-0.5">Mín: {min}</div>}

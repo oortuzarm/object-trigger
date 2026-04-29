@@ -1,9 +1,10 @@
 import * as tf from '@tensorflow/tfjs'
-import { loadFeatureExtractor, extractFeaturesFromBatch } from '@/features/training/featureExtractor'
+import { loadFeatureExtractor, extractFeatures } from '@/features/training/featureExtractor'
 import { buildClassifier, trainClassifier } from '@/features/training/classifier'
 import { serializeModel } from '@/features/training/modelSerializer'
 import { getSamplesByClass } from '@/features/storage/samplesStore'
-import type { TrainingConfig, TrainingProgress, TrainingResult } from '@/types/training.types'
+import { getAugmentedBlobs } from '@/features/training/augmentation'
+import type { TrainingConfig, TrainingProgress, TrainingResult, PerClassResult } from '@/types/training.types'
 
 self.onmessage = async (e: MessageEvent) => {
   const { type, classIds, config } = e.data as {
@@ -18,7 +19,7 @@ self.onmessage = async (e: MessageEvent) => {
     self.postMessage({ type: 'PROGRESS', progress: p })
 
   try {
-    // 1. Load samples from IDB
+    // ── 1. Load all blobs from IDB ─────────────────────────────────────────
     postProgress({
       status: 'extracting_features',
       currentEpoch: 0,
@@ -27,23 +28,38 @@ self.onmessage = async (e: MessageEvent) => {
       message: 'Cargando muestras...',
     })
 
-    const allBlobs: Blob[] = []
-    const allLabels: number[] = []
+    // Keep original blobs separate from augmented so accuracy can be
+    // measured honestly on unmodified images after training.
+    const origBlobs: Blob[] = []
+    const origLabels: number[] = []
+    const augBlobs: Blob[] = []
+    const augLabels: number[] = []
 
     for (let i = 0; i < classIds.length; i++) {
       const samples = await getSamplesByClass(classIds[i])
       for (const s of samples) {
-        allBlobs.push(s.blob)
-        allLabels.push(i)
+        origBlobs.push(s.blob)
+        origLabels.push(i)
+        try {
+          const variants = await getAugmentedBlobs(s.blob)
+          for (const v of variants) {
+            augBlobs.push(v)
+            augLabels.push(i)
+          }
+        } catch {
+          // augmentation failed for this sample — skip quietly
+        }
       }
     }
 
-    if (allBlobs.length === 0) {
+    if (origBlobs.length === 0) {
       self.postMessage({ type: 'ERROR', error: 'No hay muestras para entrenar' })
       return
     }
 
-    // 2. Extract features
+    const totalBlobs = origBlobs.length + augBlobs.length
+
+    // ── 2. Load feature extractor ──────────────────────────────────────────
     const extractor = await loadFeatureExtractor((msg) => {
       postProgress({
         status: 'extracting_features',
@@ -54,18 +70,37 @@ self.onmessage = async (e: MessageEvent) => {
       })
     })
 
-    const features = await extractFeaturesFromBatch(allBlobs, extractor, (done, total) => {
+    // ── 3. Extract features (original first, then augmented) ───────────────
+    const origFeatures: Float32Array[] = []
+    const augFeatures: Float32Array[] = []
+
+    for (let i = 0; i < origBlobs.length; i++) {
+      origFeatures.push(await extractFeatures(origBlobs[i], extractor))
       postProgress({
         status: 'extracting_features',
         currentEpoch: 0,
         totalEpochs: config.epochs,
         metrics: [],
-        message: `Extrayendo features: ${done}/${total}`,
+        message: `Extrayendo features: ${i + 1}/${totalBlobs}`,
       })
-    })
+    }
 
-    // 3. Train
-    const model = buildClassifier(classIds.length, features[0].length)
+    for (let i = 0; i < augBlobs.length; i++) {
+      augFeatures.push(await extractFeatures(augBlobs[i], extractor))
+      postProgress({
+        status: 'extracting_features',
+        currentEpoch: 0,
+        totalEpochs: config.epochs,
+        metrics: [],
+        message: `Extrayendo features (aug): ${origBlobs.length + i + 1}/${totalBlobs}`,
+      })
+    }
+
+    const allFeatures = [...origFeatures, ...augFeatures]
+    const allLabels = [...origLabels, ...augLabels]
+
+    // ── 4. Train ───────────────────────────────────────────────────────────
+    const model = buildClassifier(classIds.length, allFeatures[0].length)
     const metrics: TrainingProgress['metrics'] = []
 
     postProgress({
@@ -73,10 +108,10 @@ self.onmessage = async (e: MessageEvent) => {
       currentEpoch: 0,
       totalEpochs: config.epochs,
       metrics: [],
-      message: 'Entrenando...',
+      message: `Entrenando con ${allFeatures.length} muestras (${origBlobs.length} orig + ${augBlobs.length} aug)...`,
     })
 
-    await trainClassifier(model, features, allLabels, classIds.length, config, (epochMetrics) => {
+    await trainClassifier(model, allFeatures, allLabels, classIds.length, config, (epochMetrics) => {
       metrics.push(epochMetrics)
       postProgress({
         status: 'training',
@@ -87,13 +122,42 @@ self.onmessage = async (e: MessageEvent) => {
       })
     })
 
-    // 4. Serialize
+    // ── 5. Evaluate per-class accuracy on ORIGINAL samples only ───────────
+    postProgress({
+      status: 'evaluating',
+      currentEpoch: config.epochs,
+      totalEpochs: config.epochs,
+      metrics,
+      message: 'Evaluando precisión por clase...',
+    })
+
+    const perClassAccuracy: PerClassResult[] = classIds.map((classId, classIdx) => {
+      const indices = origLabels
+        .map((l, i) => ({ l, i }))
+        .filter(({ l }) => l === classIdx)
+        .map(({ i }) => i)
+
+      let correct = 0
+      for (const idx of indices) {
+        const input = tf.tensor2d([Array.from(origFeatures[idx])])
+        const output = model.predict(input) as tf.Tensor
+        const probs = Array.from(output.dataSync() as Float32Array)
+        tf.dispose([input, output])
+        const pred = probs.indexOf(Math.max(...probs))
+        if (pred === classIdx) correct++
+      }
+
+      return { classId, correct, total: indices.length }
+    })
+
+    // ── 6. Serialize ───────────────────────────────────────────────────────
     postProgress({
       status: 'saving',
       currentEpoch: config.epochs,
       totalEpochs: config.epochs,
       metrics,
       message: 'Guardando modelo...',
+      perClassAccuracy,
     })
 
     const artifacts = await serializeModel(model)
@@ -105,6 +169,7 @@ self.onmessage = async (e: MessageEvent) => {
       finalAccuracy: lastMetric?.accuracy ?? 0,
       finalLoss: lastMetric?.loss ?? 0,
       trainedAt: Date.now(),
+      perClassAccuracy,
     }
 
     model.dispose()

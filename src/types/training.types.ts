@@ -20,11 +20,18 @@ export interface EpochMetrics {
   valAccuracy?: number
 }
 
+export interface PerClassResult {
+  classId: string
+  correct: number
+  total: number
+}
+
 export type TrainingStatus =
   | 'idle'
   | 'extracting_features'
   | 'training'
   | 'saving'
+  | 'evaluating'
   | 'done'
   | 'error'
 
@@ -35,6 +42,8 @@ export interface TrainingProgress {
   metrics: EpochMetrics[]
   message: string
   error?: string
+  /** Per-class accuracy computed on original (non-augmented) samples after training. */
+  perClassAccuracy?: PerClassResult[]
 }
 
 export interface TrainingResult {
@@ -43,6 +52,7 @@ export interface TrainingResult {
   finalAccuracy: number
   finalLoss: number
   trainedAt: number
+  perClassAccuracy: PerClassResult[]
 }
 
 export type WorkerMessage =

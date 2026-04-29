@@ -43,6 +43,8 @@ export interface FrameResult {
   bestGuess: { classId: string; confidence: number; streak: number; allProbs: number[] } | null
   /** COCO-SSD detection result. null when no object found. */
   detection: DetectionInfo | null
+  /** JPEG data-URL of the 224×224 crop actually sent to the classifier. null when no detection. */
+  cropThumbnail: string | null
   cropMethod: string
   requiredStreak: number
 }
@@ -110,6 +112,7 @@ export class InferenceEngine {
             stable: null,
             bestGuess: null,
             detection: null,
+            cropThumbnail: null,
             cropMethod: cropInfo.method,
             requiredStreak: REQUIRED_STREAK,
           })
@@ -170,6 +173,7 @@ export class InferenceEngine {
             allProbs: bestGuess.allProbs,
           },
           detection,
+          cropThumbnail: cropResult.thumbnail,
           cropMethod: cropInfo.method,
           requiredStreak: REQUIRED_STREAK,
         })

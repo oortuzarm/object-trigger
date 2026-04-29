@@ -26,6 +26,8 @@ export interface DebugPrediction {
   detectionScore: number
   detectionLabel: string
   detectionBbox: [number, number, number, number]
+  /** Data-URL of the 224×224 crop sent to the classifier this frame. */
+  cropThumbnail: string | null
 }
 
 export type InferenceStatus = 'idle' | 'running' | 'no_model' | 'error'

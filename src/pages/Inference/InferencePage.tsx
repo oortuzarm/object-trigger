@@ -45,20 +45,16 @@ export default function InferencePage() {
     )
   }
 
-  const det = inferenceState.currentDetection     // confirmed stable
+  const det = inferenceState.currentDetection     // confirmed stable custom class
   const debug = inferenceState.debugPrediction    // live frame — only set when COCO-SSD sees object
   const activeCls = det ? classes.find((c) => c.id === det.classId) : null
   const debugCls = debug ? classes.find((c) => c.id === debug.classId) : null
   const isRunning = inferenceState.status === 'running'
 
   const streakPct = debug ? Math.min(100, (debug.streakFrames / debug.requiredFrames) * 100) : 0
-
-  // Top-3 probabilities sorted descending for debug panel
-  const top3 = debug?.allProbabilities
-    ? [...modelClassIds.map((id, idx) => ({ id, idx, prob: debug.allProbabilities![idx] ?? 0 }))]
-        .sort((a, b) => b.prob - a.prob)
-        .slice(0, 3)
-    : []
+  const classifierAboveThreshold = debug && debugCls
+    ? debug.confidence >= (debugCls.confidenceThreshold ?? 0.75)
+    : false
 
   return (
     <div className="p-4 sm:p-6 max-w-6xl mx-auto">
@@ -67,13 +63,12 @@ export default function InferencePage() {
         <div>
           <h1 className="text-lg sm:text-xl font-bold text-gray-100">Reconocimiento en vivo</h1>
           <p className="text-xs sm:text-sm text-gray-500">
-            {classes.length} clase{classes.length !== 1 ? 's' : ''} — apunta la cámara a un objeto
+            {classes.length} clase{classes.length !== 1 ? 's' : ''} entrenadas
           </p>
         </div>
         <InferenceControls inferenceState={inferenceState} onStart={start} onStop={stop} />
       </div>
 
-      {/* Engine error banner */}
       {inferenceState.error && (
         <div className="mb-4 flex items-start gap-2 px-3 py-2.5 rounded-xl bg-red-950/40 border border-red-800/30">
           <span className="text-red-400 flex-shrink-0 mt-px text-sm">✕</span>
@@ -110,15 +105,15 @@ export default function InferencePage() {
         {/* Side panel */}
         <div className="space-y-3">
 
-          {/* ── State: confirmed detection ─────────────────────────────── */}
+          {/* ── A. Estado principal ───────────────────────────────────── */}
           <Card>
             <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
-              Detección activa
+              Estado
             </h3>
 
+            {/* ✅ Clase confirmada */}
             {det && activeCls ? (
-              /* ✅ Confirmed stable class */
-              <div className="space-y-3">
+              <div className="space-y-2">
                 <div className="flex items-center gap-3">
                   <div
                     className="w-10 h-10 rounded-xl flex items-center justify-center text-lg font-bold flex-shrink-0"
@@ -129,34 +124,34 @@ export default function InferencePage() {
                   <div className="min-w-0 flex-1">
                     <div className="font-semibold text-gray-100 truncate">{det.className}</div>
                     <div className="text-xs text-gray-400">
-                      {Math.round(det.confidence * 100)}% confianza · {det.streakFrames} frames
+                      {Math.round(det.confidence * 100)}% · {det.streakFrames} frames consecutivos
                     </div>
                   </div>
-                  <span className="text-green-400 text-lg flex-shrink-0">✓</span>
+                  <span className="text-green-400 text-xl flex-shrink-0">✓</span>
                 </div>
-
                 <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
                   <div
                     className="h-full rounded-full transition-all duration-200"
                     style={{ width: `${Math.round(det.confidence * 100)}%`, backgroundColor: activeCls.color }}
                   />
                 </div>
-
-                {det.detectionLabel && (
-                  <div className="text-[10px] text-gray-600 font-mono">
-                    detector: {det.detectionLabel} ({Math.round((det.detectionScore ?? 0) * 100)}%)
-                  </div>
-                )}
+                <p className="text-[10px] text-green-600 font-medium">Clase reconocida</p>
               </div>
 
             ) : isRunning && debug ? (
-              /* 🔍 COCO-SSD found object — building streak */
+              /* 🟡 COCO-SSD vio objeto, clasificador corriendo */
               <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse flex-shrink-0" />
-                  <span className="text-sm text-gray-300">
-                    {debugCls ? `Candidato: ${debugCls.name} (${Math.round(debug.confidence * 100)}%)` : 'Analizando…'}
-                  </span>
+                {/* Estado */}
+                <div className={[
+                  'flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-medium',
+                  classifierAboveThreshold
+                    ? 'bg-yellow-950/40 border border-yellow-800/30 text-yellow-400'
+                    : 'bg-gray-800/60 border border-gray-700/40 text-gray-400',
+                ].join(' ')}>
+                  <div className="w-1.5 h-1.5 rounded-full bg-yellow-500 animate-pulse flex-shrink-0" />
+                  {classifierAboveThreshold
+                    ? 'Acumulando frames...'
+                    : 'Objeto detectado, no reconocido'}
                 </div>
 
                 {/* Streak progress */}
@@ -167,124 +162,172 @@ export default function InferencePage() {
                   </div>
                   <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
                     <div
-                      className="h-full rounded-full transition-all duration-150 bg-yellow-600"
-                      style={{ width: `${streakPct}%` }}
+                      className="h-full rounded-full transition-all duration-150"
+                      style={{
+                        width: `${streakPct}%`,
+                        backgroundColor: classifierAboveThreshold ? '#22c55e' : '#ca8a04',
+                      }}
                     />
                   </div>
-                </div>
-
-                <div className="text-[10px] text-gray-600 font-mono space-y-0.5">
-                  <div>detector: <span className="text-gray-500">{debug.detectionLabel}</span> {Math.round(debug.detectionScore * 100)}%</div>
-                  {debugCls && (
-                    <div>umbral: {Math.round((debugCls.confidenceThreshold ?? 0.75) * 100)}%
-                      {debug.confidence < (debugCls.confidenceThreshold ?? 0.75) && (
-                        <span className="text-yellow-700"> · confianza insuficiente</span>
-                      )}
-                    </div>
-                  )}
                 </div>
               </div>
 
             ) : isRunning ? (
-              /* ⬜ Running but no COCO-SSD detection */
-              <div className="flex items-center gap-2 text-gray-600 py-2">
+              /* ⚪ Sin detección COCO-SSD */
+              <div className="flex items-center gap-2 text-gray-600 py-1">
                 <svg className="w-4 h-4 animate-spin flex-shrink-0" viewBox="0 0 24 24" fill="none">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
                 </svg>
                 <span className="text-sm">Buscando objeto…</span>
               </div>
-
             ) : (
-              /* ⚪ Idle */
-              <div className="text-center py-4 text-gray-700">
+              <div className="text-center py-3 text-gray-700">
                 <div className="text-2xl mb-1">◎</div>
                 <p className="text-xs">Inactivo</p>
               </div>
             )}
           </Card>
 
-          {/* ── Debug: live probabilities ──────────────────────────────── */}
-          {isRunning && (
+          {/* ── B. Debug: Detector genérico vs Clasificador ──────────── */}
+          {isRunning && debug && (
             <Card>
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                  Probabilidades
-                </h3>
-                {debug ? (
-                  <span className="text-[10px] font-mono text-yellow-600/80">objeto detectado</span>
-                ) : (
-                  <span className="text-[10px] font-mono text-gray-700">sin objeto</span>
-                )}
-              </div>
+              {/* Separación conceptual clara */}
+              <div className="space-y-3">
 
-              {debug ? (
-                <div className="space-y-2">
-                  {/* All classes sorted by probability */}
-                  {[...modelClassIds.map((id, idx) => ({
-                    id, idx, prob: debug.allProbabilities?.[idx] ?? 0,
-                  }))]
-                    .sort((a, b) => b.prob - a.prob)
-                    .map(({ id, prob }, rank) => {
-                      const cls = classes.find((c) => c.id === id)
-                      if (!cls) return null
-                      const isWinner = debug.classId === id
-                      const isConfirmed = det?.classId === id
-                      const isTop3 = rank < 3
+                {/* Detector genérico (COCO-SSD) */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-semibold text-gray-600 uppercase tracking-wider">
+                      Detector genérico (COCO-SSD)
+                    </span>
+                    <span className="text-[10px] text-gray-700">identifica el tipo de objeto</span>
+                  </div>
+                  <div className="flex items-center gap-2 px-2.5 py-2 bg-gray-800/50 rounded-lg">
+                    <span className="text-xs font-mono text-blue-400">{debug.detectionLabel}</span>
+                    <span className="text-xs text-gray-500">{Math.round(debug.detectionScore * 100)}%</span>
+                    <div className="flex-1 h-1 bg-gray-700 rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-blue-600/60"
+                        style={{ width: `${Math.round(debug.detectionScore * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[9px] text-gray-700 mt-1">
+                    Este label (ej. "cup", "bottle") no es tu clase entrenada — solo indica que hay un objeto real en cámara.
+                  </p>
+                </div>
 
-                      return (
-                        <div key={id} className="space-y-0.5">
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              {rank === 0 && <span className="text-[9px] text-yellow-600">▲</span>}
-                              <span
-                                className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-                                style={{ backgroundColor: isWinner ? cls.color : cls.color + '44' }}
-                              />
-                              <span className={[
-                                'text-xs truncate',
-                                isConfirmed ? 'text-green-400 font-medium'
-                                  : isWinner ? 'text-gray-200 font-medium'
-                                  : isTop3 ? 'text-gray-400'
-                                  : 'text-gray-600',
-                              ].join(' ')}>
-                                {cls.name}
-                                {isConfirmed && ' ✓'}
-                              </span>
-                            </div>
+                <div className="border-t border-gray-800" />
+
+                {/* Clasificador personalizado */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-semibold text-gray-600 uppercase tracking-wider">
+                      Clasificador personalizado
+                    </span>
+                    <span className="text-[10px] text-gray-700">tus clases entrenadas</span>
+                  </div>
+
+                  {/* Top prediction */}
+                  {debugCls && (
+                    <div className="flex items-center gap-2 px-2.5 py-2 bg-gray-800/50 rounded-lg mb-2">
+                      <span
+                        className="w-2 h-2 rounded-full flex-shrink-0"
+                        style={{ backgroundColor: debugCls.color }}
+                      />
+                      <span className="text-xs font-medium text-gray-200 truncate flex-1">
+                        {debugCls.name}
+                      </span>
+                      <span className={[
+                        'text-xs font-mono flex-shrink-0',
+                        classifierAboveThreshold ? 'text-green-400' : 'text-yellow-500',
+                      ].join(' ')}>
+                        {Math.round(debug.confidence * 100)}%
+                      </span>
+                      <span className="text-[10px] text-gray-600 flex-shrink-0">
+                        umbral {Math.round((debugCls.confidenceThreshold ?? 0.75) * 100)}%
+                      </span>
+                    </div>
+                  )}
+
+                  {/* All classes sorted */}
+                  <div className="space-y-1.5">
+                    {[...modelClassIds.map((id, idx) => ({
+                      id, idx, prob: debug.allProbabilities?.[idx] ?? 0,
+                    }))]
+                      .sort((a, b) => b.prob - a.prob)
+                      .map(({ id, prob }, rank) => {
+                        const cls = classes.find((c) => c.id === id)
+                        if (!cls) return null
+                        const isWinner = debug.classId === id
+                        const isConfirmed = det?.classId === id
+                        return (
+                          <div key={id} className="flex items-center gap-2">
+                            {rank === 0 && <span className="text-[9px] text-yellow-600 w-2">▲</span>}
+                            {rank !== 0 && <span className="w-2" />}
+                            <span
+                              className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                              style={{ backgroundColor: isWinner ? cls.color : cls.color + '44' }}
+                            />
+                            <span className={[
+                              'text-xs flex-1 truncate',
+                              isConfirmed ? 'text-green-400 font-medium'
+                                : isWinner ? 'text-gray-200'
+                                : 'text-gray-600',
+                            ].join(' ')}>
+                              {cls.name}{isConfirmed && ' ✓'}
+                            </span>
                             <span className={[
                               'text-xs font-mono flex-shrink-0',
-                              isConfirmed ? 'text-green-400' : isWinner ? 'text-yellow-500' : 'text-gray-600',
+                              isConfirmed ? 'text-green-400' : isWinner ? 'text-yellow-500' : 'text-gray-700',
                             ].join(' ')}>
                               {Math.round(prob * 100)}%
                             </span>
+                            <div className="w-12 h-1 bg-gray-800 rounded-full overflow-hidden flex-shrink-0">
+                              <div
+                                className="h-full rounded-full"
+                                style={{
+                                  width: `${Math.round(prob * 100)}%`,
+                                  backgroundColor: isWinner ? cls.color + '99' : cls.color + '33',
+                                }}
+                              />
+                            </div>
                           </div>
-                          <div className="h-1 bg-gray-800 rounded-full overflow-hidden">
-                            <div
-                              className="h-full rounded-full transition-all duration-200"
-                              style={{
-                                width: `${Math.round(prob * 100)}%`,
-                                backgroundColor: isConfirmed ? cls.color
-                                  : isWinner ? cls.color + '99'
-                                  : cls.color + '33',
-                              }}
-                            />
-                          </div>
-                        </div>
-                      )
-                    })}
-
-                  {/* Footer: streak + fps */}
-                  <div className="flex justify-between text-[10px] text-gray-700 pt-1 font-mono">
-                    <span>streak {debug.streakFrames}/{debug.requiredFrames}</span>
-                    {inferenceState.fps > 0 && <span>{inferenceState.fps} fps</span>}
+                        )
+                      })}
                   </div>
                 </div>
-              ) : (
-                <div className="text-xs text-gray-700 py-3 text-center">
-                  El clasificador no corre sin detección previa
+
+                {/* Crop thumbnail + FPS footer */}
+                <div className="border-t border-gray-800 pt-2 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    {debug.cropThumbnail && (
+                      <div className="flex-shrink-0">
+                        <p className="text-[9px] text-gray-700 mb-0.5">Recorte enviado al clasificador:</p>
+                        <img
+                          src={debug.cropThumbnail}
+                          alt="crop"
+                          className="w-12 h-12 rounded object-cover border border-gray-700"
+                        />
+                      </div>
+                    )}
+                    <div className="text-[10px] text-gray-700 font-mono space-y-0.5">
+                      <div>streak {debug.streakFrames}/{debug.requiredFrames}</div>
+                      {inferenceState.fps > 0 && <div>{inferenceState.fps} fps</div>}
+                    </div>
+                  </div>
                 </div>
-              )}
+              </div>
+            </Card>
+          )}
+
+          {/* When running but no COCO-SSD detection — show why classifier is not running */}
+          {isRunning && !debug && (
+            <Card>
+              <p className="text-xs text-gray-600 text-center py-2">
+                El clasificador no corre hasta que COCO-SSD detecte un objeto en cámara.
+              </p>
             </Card>
           )}
 

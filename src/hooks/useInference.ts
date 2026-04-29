@@ -11,7 +11,7 @@ export function useInference(videoRef: React.RefObject<HTMLVideoElement>) {
 
   const handleFrame = useCallback(
     (frame: FrameResult) => {
-      const { stable, bestGuess, detection, cropMethod, requiredStreak } = frame
+      const { stable, bestGuess, detection, cropThumbnail, cropMethod, requiredStreak } = frame
 
       // ── No COCO-SSD detection → classifier never ran ──────────────────
       // Clear both detection and debug so the UI shows "Buscando objeto..."
@@ -33,6 +33,7 @@ export function useInference(videoRef: React.RefObject<HTMLVideoElement>) {
             detectionScore: detection.score,
             detectionLabel: detection.label,
             detectionBbox: detection.bbox,
+            cropThumbnail,
           }
         : null
 
