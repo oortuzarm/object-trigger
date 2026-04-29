@@ -1,4 +1,4 @@
-import { useCallback, useRef, useEffect } from 'react'
+import { useCallback, useRef, useEffect, useState } from 'react'
 import { useAppStore } from '@/store/appStore'
 import { inferenceEngine } from '@/features/inference/inferenceEngine'
 import type { FrameResult } from '@/features/inference/inferenceEngine'
@@ -9,12 +9,14 @@ import { toast } from '@/components/ui/Toast'
 export function useInference(videoRef: React.RefObject<HTMLVideoElement>) {
   const { classes, setInferenceState, inferenceState } = useAppStore()
   const loadedRef = useRef(false)
+  // Prevents concurrent start() calls (e.g. rapid double-click before engine loads)
+  const isStartingRef = useRef(false)
+  const [isStarting, setIsStarting] = useState(false)
 
   const handleFrame = useCallback(
     (frame: FrameResult) => {
       const { stable, bestGuess, detection, cropThumbnail, cropMethod, requiredStreak, mode, ocrText, candidates, lockedFrames } = frame
 
-      // No COCO-SSD detection → classifier/embeddings did not run
       if (!bestGuess || !detection) {
         setInferenceState({ currentDetection: null, debugPrediction: null })
         return
@@ -58,12 +60,6 @@ export function useInference(videoRef: React.RefObject<HTMLVideoElement>) {
           const base = cls.confidenceThreshold
           const ocrConfirms = stable.classId === ocrMatchClassId
 
-          // ── Effective threshold (OCR can lower it when it confirms the class) ──
-          // scoreOCR >= 0.85: strong signal (exact/near-exact, long keyword)
-          //   → reduce threshold by 20%
-          // scoreOCR >= 0.60: moderate signal (exact short kw or good fuzzy long kw)
-          //   → reduce threshold by 13%
-          // scoreOCR <  0.60: weak/absent → no reduction
           let effective = base
           if (ocrConfirms) {
             if (ocrScore >= 0.85) {
@@ -72,9 +68,6 @@ export function useInference(videoRef: React.RefObject<HTMLVideoElement>) {
               effective = Math.max(0.45, base * 0.87)
             }
 
-            // ── Tiebreaker: ambiguous embedding + OCR confirms winner ─────────
-            // When the top-2 embedding gap is narrow, OCR matching the streak
-            // winner earns an extra 5% reduction to break the tie.
             const sorted = [...bestGuess.allProbs].sort((a, b) => b - a)
             const gap = (sorted[0] ?? 0) - (sorted[1] ?? 0)
             if (gap < 0.10 && (sorted[0] ?? 0) > 0.30 && ocrScore >= 0.60) {
@@ -101,7 +94,7 @@ export function useInference(videoRef: React.RefObject<HTMLVideoElement>) {
         }
       }
 
-      // Propagate OCR hint to engine so next prescore cycle can boost matching candidates
+      // Propagate OCR hint to engine for next prescore cycle
       inferenceEngine.setOcrHint(ocrMatchClassId, ocrMatch ? ocrScore : 0)
 
       setInferenceState({ currentDetection, debugPrediction, mode })
@@ -119,7 +112,6 @@ export function useInference(videoRef: React.RefObject<HTMLVideoElement>) {
       return false
     }
 
-    // ── Embeddings mode (preferred) ─────────────────────────────────────────
     const hasEmbeddings = await inferenceEngine.tryLoadEmbeddings(currentClassIds)
     if (hasEmbeddings) {
       console.log('[Inference] Modo embeddings — %d vectores cargados', currentClassIds.length)
@@ -128,7 +120,6 @@ export function useInference(videoRef: React.RefObject<HTMLVideoElement>) {
       return true
     }
 
-    // ── Classifier fallback ─────────────────────────────────────────────────
     const stored = await loadModel()
     if (!stored) {
       toast.error('No hay embeddings ni modelo entrenado. Captura imágenes primero.')
@@ -146,23 +137,34 @@ export function useInference(videoRef: React.RefObject<HTMLVideoElement>) {
   const start = useCallback(async () => {
     const video = videoRef.current
     if (!video) return
+    // Guards against concurrent starts (rapid double-click, overlapping async calls)
+    if (isStartingRef.current) return
+    if (inferenceState.status === 'running') return
 
-    const ready = await loadEngineIfNeeded()
-    if (!ready) return
+    isStartingRef.current = true
+    setIsStarting(true)
 
-    setInferenceState({
-      status: 'running',
-      error: undefined,
-      currentDetection: null,
-      debugPrediction: null,
-    })
-    inferenceEngine.start(
-      video,
-      handleFrame,
-      (fps) => setInferenceState({ fps }),
-      (errMsg) => setInferenceState({ error: errMsg })
-    )
-  }, [videoRef, loadEngineIfNeeded, handleFrame, setInferenceState])
+    try {
+      const ready = await loadEngineIfNeeded()
+      if (!ready) return
+
+      setInferenceState({
+        status: 'running',
+        error: undefined,
+        currentDetection: null,
+        debugPrediction: null,
+      })
+      inferenceEngine.start(
+        video,
+        handleFrame,
+        (fps) => setInferenceState({ fps }),
+        (errMsg) => setInferenceState({ error: errMsg })
+      )
+    } finally {
+      isStartingRef.current = false
+      setIsStarting(false)
+    }
+  }, [videoRef, loadEngineIfNeeded, handleFrame, setInferenceState, inferenceState.status])
 
   const stop = useCallback(() => {
     inferenceEngine.stop()
@@ -176,5 +178,5 @@ export function useInference(videoRef: React.RefObject<HTMLVideoElement>) {
     }
   }, [])
 
-  return { inferenceState, start, stop }
+  return { inferenceState, isStarting, start, stop }
 }

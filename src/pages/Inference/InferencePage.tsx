@@ -5,15 +5,40 @@ import { useCamera } from '@/hooks/useCamera'
 import { useInference } from '@/hooks/useInference'
 import CameraView from '@/components/camera/CameraView'
 import DetectionOverlay from '@/components/overlay/DetectionOverlay'
-import InferenceControls from './InferenceControls'
+import InferenceStatusRow from './InferenceControls'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
+
+// ── CTA phase state machine ────────────────────────────────────────────────────
+// 'error'      — camera permission denied or stream failed
+// 'preparing'  — camera started but video not yet ready to display frames
+// 'ready'      — video has data, engine idle, safe to start
+// 'starting'   — start() called, loading model/embeddings (async)
+// 'running'    — inference engine active
+
+type Phase = 'error' | 'preparing' | 'ready' | 'starting' | 'running'
+
+const PHASE_LABEL: Record<Phase, string> = {
+  error:      'Cámara no disponible',
+  preparing:  'Preparando cámara…',
+  ready:      'Iniciar reconocimiento',
+  starting:   'Iniciando…',
+  running:    'Detener reconocimiento',
+}
+
+const PHASE_STATUS: Record<Phase, string> = {
+  error:      'Cámara no disponible',
+  preparing:  'Preparando cámara…',
+  ready:      'Cámara lista',
+  starting:   'Iniciando motor…',
+  running:    'Reconociendo…',
+}
 
 export default function InferencePage() {
   const navigate = useNavigate()
   const { modelStatus, classes, modelClassIds, embeddingCountByClass } = useAppStore()
   const camera = useCamera()
-  const { inferenceState, start, stop } = useInference(camera.videoRef)
+  const { inferenceState, isStarting, start, stop } = useInference(camera.videoRef)
   const [showDebug, setShowDebug] = useState(false)
 
   const hasEmbeddings = Object.values(embeddingCountByClass).some((count) => count > 0)
@@ -26,6 +51,7 @@ export default function InferencePage() {
     }
   }, [])
 
+  // ── Guard: nothing to recognize ────────────────────────────────────────────
   if (modelStatus !== 'ready' && !hasEmbeddings) {
     return (
       <div className="p-4 sm:p-6 max-w-lg mx-auto text-center pt-16 sm:pt-20">
@@ -48,15 +74,19 @@ export default function InferencePage() {
     )
   }
 
+  // ── Derived state ──────────────────────────────────────────────────────────
   const det = inferenceState.currentDetection
   const debug = inferenceState.debugPrediction
   const activeCls = det ? classes.find((c) => c.id === det.classId) : null
   const isRunning = inferenceState.status === 'running'
   const isEmbeddingsMode = inferenceState.mode === 'embeddings'
 
-  // In embeddings mode allProbs maps to classes.map(c=>c.id) order;
-  // in classifier mode it maps to modelClassIds order.
   const classIdList = isEmbeddingsMode ? classes.map((c) => c.id) : modelClassIds
+  const confidenceLabel = isEmbeddingsMode ? 'similitud' : 'confianza'
+  const classCount = isEmbeddingsMode ? classes.length : modelClassIds.length
+  const classCountLabel = isEmbeddingsMode
+    ? `${classCount} clase${classCount !== 1 ? 's' : ''} con embeddings`
+    : `${classCount} clase${classCount !== 1 ? 's' : ''} entrenadas`
 
   const sortedProbs = debug?.allProbabilities
     ? classIdList
@@ -79,23 +109,30 @@ export default function InferencePage() {
 
   const streakPct = debug ? Math.min(100, (debug.streakFrames / debug.requiredFrames) * 100) : 0
 
-  const confidenceLabel = isEmbeddingsMode ? 'similitud' : 'confianza'
-  const classCount = isEmbeddingsMode ? classes.length : modelClassIds.length
-  const classCountLabel = isEmbeddingsMode
-    ? `${classCount} clase${classCount !== 1 ? 's' : ''} con embeddings`
-    : `${classCount} clase${classCount !== 1 ? 's' : ''} entrenadas`
+  // ── CTA phase ──────────────────────────────────────────────────────────────
+  const phase: Phase =
+    camera.state.error ? 'error' :
+    isRunning          ? 'running' :
+    isStarting         ? 'starting' :
+    camera.state.isReady ? 'ready' :
+    'preparing'
+
+  const ctaDisabled = phase === 'error' || phase === 'preparing' || phase === 'starting'
 
   return (
     <div className="p-4 sm:p-6 max-w-6xl mx-auto">
-      {/* Header */}
+
+      {/* ── Header ──────────────────────────────────────────────────────────── */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
         <div>
           <h1 className="text-lg sm:text-xl font-bold text-gray-100">Reconocimiento en vivo</h1>
           <p className="text-xs sm:text-sm text-gray-500">{classCountLabel}</p>
         </div>
-        <InferenceControls inferenceState={inferenceState} onStart={start} onStop={stop} />
+        {/* Status badges only — no start/stop here */}
+        <InferenceStatusRow inferenceState={inferenceState} />
       </div>
 
+      {/* Inference engine errors */}
       {inferenceState.error && (
         <div className="mb-4 flex items-start gap-2 px-3 py-2.5 rounded-xl bg-red-950/40 border border-red-800/30">
           <span className="text-red-400 flex-shrink-0 mt-px">✕</span>
@@ -105,126 +142,132 @@ export default function InferencePage() {
 
       <div className="flex flex-col lg:grid lg:grid-cols-3 gap-4">
 
-        {/* Camera */}
+        {/* ── Camera ──────────────────────────────────────────────────────────── */}
         <div className="lg:col-span-2">
-          <div className="relative">
-            <CameraView
-              ref={camera.videoRef}
-              isActive={camera.state.isActive}
-              error={camera.state.error}
-              onFlip={camera.flip}
-              className="w-full aspect-[4/3] sm:aspect-video"
-            />
-            {isRunning && <DetectionOverlay />}
-          </div>
-
-          {!isRunning && camera.state.isActive && (
-            <div className="mt-3 p-3 rounded-xl border border-dashed border-gray-700 flex flex-col sm:flex-row items-center justify-center gap-3">
-              <span className="text-sm text-gray-500 text-center">
-                Cámara lista — presiona Iniciar para reconocer
-              </span>
-              <Button size="sm" onClick={start} className="w-full sm:w-auto">
-                Iniciar reconocimiento
-              </Button>
-            </div>
-          )}
+          <CameraView
+            ref={camera.videoRef}
+            isActive={camera.state.isActive}
+            error={camera.state.error}
+            onFlip={camera.flip}
+            className="w-full aspect-[4/3] sm:aspect-video"
+          />
+          {isRunning && <DetectionOverlay />}
         </div>
 
-        {/* Side panel */}
+        {/* ── Side panel ──────────────────────────────────────────────────────── */}
         <div className="space-y-3">
 
-          {/* ── RESULTADO PRINCIPAL ──────────────────────────────────── */}
+          {/* ── CTA — single source of truth for start/stop ─────────────────── */}
           <Card>
+            {/* Camera / inference status */}
+            <div className="flex items-center gap-2 mb-3">
+              <div className={[
+                'w-2 h-2 rounded-full flex-shrink-0 transition-colors duration-300',
+                phase === 'error'     ? 'bg-red-500' :
+                phase === 'preparing' ? 'bg-yellow-500 animate-pulse' :
+                phase === 'ready'     ? 'bg-green-500' :
+                phase === 'starting'  ? 'bg-brand-500 animate-pulse' :
+                /* running */           'bg-green-400 animate-pulse',
+              ].join(' ')} />
+              <span className="text-xs text-gray-400 flex-1">{PHASE_STATUS[phase]}</span>
+              {isRunning && inferenceState.fps > 0 && (
+                <span className="font-mono text-xs text-gray-600">{inferenceState.fps} FPS</span>
+              )}
+            </div>
 
-            {/* ✅ Clase confirmada */}
-            {det && activeCls ? (
-              <div className="space-y-2">
-                <div className="flex items-start gap-3">
-                  <div
-                    className="w-11 h-11 rounded-xl flex items-center justify-center text-xl font-bold flex-shrink-0"
-                    style={{ backgroundColor: activeCls.color + '22', color: activeCls.color }}
-                  >
-                    {det.className[0]?.toUpperCase()}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="text-[10px] font-semibold text-green-500 uppercase tracking-wider mb-0.5">
-                      Objeto reconocido
-                    </div>
-                    <div className="font-bold text-gray-100 text-base truncate">{det.className}</div>
-                    <div className="text-xs text-gray-400 mt-0.5">
-                      {Math.round(det.confidence * 100)}% {confidenceLabel}
-                    </div>
-                  </div>
-                  <span className="text-green-400 text-2xl flex-shrink-0 mt-0.5">✓</span>
-                </div>
-                <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
-                  <div
-                    className="h-full rounded-full transition-all duration-200"
-                    style={{ width: `${Math.round(det.confidence * 100)}%`, backgroundColor: activeCls.color }}
-                  />
-                </div>
-              </div>
-
-            ) : isRunning && debug ? (
-              /* 🟡 Objeto en cámara pero no reconocido */
-              <div className="space-y-3">
-                <div className="text-[10px] font-semibold text-yellow-500/80 uppercase tracking-wider">
-                  Objeto detectado, no reconocido
-                </div>
-
-                {/* Ambiguity warning */}
-                {isAmbiguous && top1Cls && top2Cls && (
-                  <div className="px-2.5 py-2 rounded-lg bg-yellow-950/30 border border-yellow-800/30">
-                    <p className="text-xs text-yellow-500">
-                      Modelo no está seguro entre{' '}
-                      <span className="font-medium">{top1Cls.name}</span>
-                      {' '}y{' '}
-                      <span className="font-medium">{top2Cls.name}</span>
-                      {' '}({Math.round(top1.prob * 100)}% vs {Math.round(top2.prob * 100)}%).
-                    </p>
-                    <p className="text-[10px] text-yellow-700 mt-1">
-                      Captura más muestras o reduce similitud entre clases.
-                    </p>
-                  </div>
-                )}
-
-                {/* Streak bar */}
-                {classifierAboveThreshold && (
-                  <div className="space-y-1">
-                    <div className="flex justify-between text-[10px] text-gray-600">
-                      <span>Estabilizando…</span>
-                      <span>{debug.streakFrames}/{debug.requiredFrames} frames</span>
-                    </div>
-                    <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all duration-150 bg-green-700"
-                        style={{ width: `${streakPct}%` }}
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-
-            ) : isRunning ? (
-              /* ⚪ Sin detección */
-              <div className="flex items-center gap-2 text-gray-600 py-1">
-                <svg className="w-4 h-4 animate-spin flex-shrink-0" viewBox="0 0 24 24" fill="none">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
-                </svg>
-                <span className="text-sm">Buscando objeto…</span>
-              </div>
-
-            ) : (
-              /* Idle */
-              <div className="text-center py-3 text-gray-700">
-                <div className="text-2xl mb-1">◎</div>
-                <p className="text-xs">Inactivo</p>
-              </div>
-            )}
+            <Button
+              variant={phase === 'running' ? 'danger' : 'primary'}
+              className="w-full"
+              disabled={ctaDisabled}
+              loading={phase === 'starting'}
+              onClick={phase === 'running' ? stop : start}
+            >
+              {PHASE_LABEL[phase]}
+            </Button>
           </Card>
 
-          {/* ── SIMILITUD / CONFIANZA por clase ─────────────────────── */}
+          {/* ── RESULTADO PRINCIPAL ──────────────────────────────────────────── */}
+          {(isRunning || det) && (
+            <Card>
+              {det && activeCls ? (
+                /* ✅ Confirmed detection */
+                <div className="space-y-2">
+                  <div className="flex items-start gap-3">
+                    <div
+                      className="w-11 h-11 rounded-xl flex items-center justify-center text-xl font-bold flex-shrink-0"
+                      style={{ backgroundColor: activeCls.color + '22', color: activeCls.color }}
+                    >
+                      {det.className[0]?.toUpperCase()}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[10px] font-semibold text-green-500 uppercase tracking-wider mb-0.5">
+                        Objeto reconocido
+                      </div>
+                      <div className="font-bold text-gray-100 text-base truncate">{det.className}</div>
+                      <div className="text-xs text-gray-400 mt-0.5">
+                        {Math.round(det.confidence * 100)}% {confidenceLabel}
+                      </div>
+                    </div>
+                    <span className="text-green-400 text-2xl flex-shrink-0 mt-0.5">✓</span>
+                  </div>
+                  <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all duration-200"
+                      style={{ width: `${Math.round(det.confidence * 100)}%`, backgroundColor: activeCls.color }}
+                    />
+                  </div>
+                </div>
+
+              ) : isRunning && debug ? (
+                /* 🟡 Object visible but not confirmed */
+                <div className="space-y-3">
+                  <div className="text-[10px] font-semibold text-yellow-500/80 uppercase tracking-wider">
+                    Objeto detectado, no reconocido
+                  </div>
+                  {isAmbiguous && top1Cls && top2Cls && (
+                    <div className="px-2.5 py-2 rounded-lg bg-yellow-950/30 border border-yellow-800/30">
+                      <p className="text-xs text-yellow-500">
+                        Modelo no está seguro entre{' '}
+                        <span className="font-medium">{top1Cls.name}</span>
+                        {' '}y{' '}
+                        <span className="font-medium">{top2Cls.name}</span>
+                        {' '}({Math.round(top1.prob * 100)}% vs {Math.round(top2.prob * 100)}%).
+                      </p>
+                      <p className="text-[10px] text-yellow-700 mt-1">
+                        Captura más muestras o reduce similitud entre clases.
+                      </p>
+                    </div>
+                  )}
+                  {classifierAboveThreshold && (
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[10px] text-gray-600">
+                        <span>Estabilizando…</span>
+                        <span>{debug.streakFrames}/{debug.requiredFrames} frames</span>
+                      </div>
+                      <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                        <div
+                          className="h-full rounded-full transition-all duration-150 bg-green-700"
+                          style={{ width: `${streakPct}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+              ) : (
+                /* ⚪ Scanning */
+                <div className="flex items-center gap-2 text-gray-600 py-1">
+                  <svg className="w-4 h-4 animate-spin flex-shrink-0" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+                  </svg>
+                  <span className="text-sm">Buscando objeto…</span>
+                </div>
+              )}
+            </Card>
+          )}
+
+          {/* ── SIMILITUD / CONFIANZA por clase ──────────────────────────────── */}
           {isRunning && debug && (
             <Card>
               <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2.5">
@@ -236,7 +279,6 @@ export default function InferencePage() {
                   if (!cls) return null
                   const isWinner = debug.classId === id
                   const isConfirmed = det?.classId === id
-
                   return (
                     <div key={id} className="space-y-0.5">
                       <div className="flex items-center gap-1.5">
@@ -286,7 +328,7 @@ export default function InferencePage() {
             </Card>
           )}
 
-          {/* ── DEBUG TÉCNICO (colapsable) ────────────────────────────── */}
+          {/* ── DEBUG TÉCNICO (colapsable) ────────────────────────────────────── */}
           {isRunning && (
             <div>
               <button
@@ -300,7 +342,7 @@ export default function InferencePage() {
               {showDebug && (
                 <div className="mt-1 p-3 rounded-xl border border-gray-800 bg-gray-950/50 space-y-3">
 
-                  {/* Mode indicator */}
+                  {/* Mode badge */}
                   <div className="flex items-center gap-2">
                     <span className="text-[10px] font-semibold text-gray-600 uppercase tracking-wider">Modo:</span>
                     <span className={[
@@ -370,7 +412,7 @@ export default function InferencePage() {
                         )}
                       </div>
 
-                      {/* COCO-SSD selected detection */}
+                      {/* Selected detection */}
                       <div>
                         <p className="text-[10px] font-semibold text-gray-600 uppercase tracking-wider mb-1">
                           Seleccionado
@@ -387,21 +429,18 @@ export default function InferencePage() {
                         </div>
                       </div>
 
-                      {/* OCR result */}
+                      {/* OCR */}
                       <div>
                         <p className="text-[10px] font-semibold text-gray-600 uppercase tracking-wider mb-1">
                           OCR
                         </p>
                         {debug.ocrText ? (
                           <div className="space-y-1.5">
-                            {/* Detected text */}
                             <p className="text-[10px] font-mono text-gray-400 break-all leading-relaxed bg-gray-900/60 px-2 py-1.5 rounded-lg">
                               "{debug.ocrText}"
                             </p>
-
                             {debug.ocrMatchClassId && debug.ocrScore !== null ? (
                               <div className="flex items-start gap-1.5 flex-wrap">
-                                {/* Match type badge */}
                                 <span className={[
                                   'text-[9px] font-semibold px-1.5 py-0.5 rounded uppercase tracking-wide flex-shrink-0',
                                   debug.ocrMatchType === 'exact'
@@ -410,11 +449,9 @@ export default function InferencePage() {
                                 ].join(' ')}>
                                   {debug.ocrMatchType}
                                 </span>
-                                {/* Score */}
                                 <span className="text-[10px] font-mono text-gray-500 flex-shrink-0">
                                   {Math.round(debug.ocrScore * 100)}%
                                 </span>
-                                {/* Keyword → class */}
                                 <span className="text-[10px] text-gray-500 break-all min-w-0">
                                   "<span className="font-mono text-gray-300">{debug.ocrMatchedKeyword}</span>"
                                   {' '}→{' '}
@@ -448,10 +485,9 @@ export default function InferencePage() {
                         </div>
                       )}
 
-                      {/* Streak + FPS */}
+                      {/* Streak */}
                       <div className="flex justify-between text-[10px] font-mono text-gray-700">
                         <span>streak {debug.streakFrames}/{debug.requiredFrames}</span>
-                        {inferenceState.fps > 0 && <span>{inferenceState.fps} fps</span>}
                       </div>
                     </>
                   ) : (
@@ -472,6 +508,7 @@ export default function InferencePage() {
           >
             Configurar overlays y assets →
           </Button>
+
         </div>
       </div>
     </div>
