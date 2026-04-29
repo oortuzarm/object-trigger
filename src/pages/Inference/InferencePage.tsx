@@ -341,24 +341,43 @@ export default function InferencePage() {
                           OCR
                         </p>
                         {debug.ocrText ? (
-                          <div className="space-y-1">
-                            <p className="text-[10px] font-mono text-gray-500 break-all leading-relaxed bg-gray-900/60 px-2 py-1 rounded-lg">
+                          <div className="space-y-1.5">
+                            {/* Detected text */}
+                            <p className="text-[10px] font-mono text-gray-400 break-all leading-relaxed bg-gray-900/60 px-2 py-1.5 rounded-lg">
                               "{debug.ocrText}"
                             </p>
-                            {debug.ocrMatchClassId ? (
-                              <p className="text-[10px] text-green-600">
-                                Match: "<span className="font-mono">{debug.ocrMatchedKeyword}</span>" →{' '}
-                                <span className="font-medium">
-                                  {classes.find((c) => c.id === debug.ocrMatchClassId)?.name}
+
+                            {debug.ocrMatchClassId && debug.ocrScore !== null ? (
+                              <div className="flex items-start gap-1.5 flex-wrap">
+                                {/* Match type badge */}
+                                <span className={[
+                                  'text-[9px] font-semibold px-1.5 py-0.5 rounded uppercase tracking-wide flex-shrink-0',
+                                  debug.ocrMatchType === 'exact'
+                                    ? 'bg-green-950/60 text-green-500'
+                                    : 'bg-yellow-950/60 text-yellow-500',
+                                ].join(' ')}>
+                                  {debug.ocrMatchType}
                                 </span>
-                              </p>
+                                {/* Score */}
+                                <span className="text-[10px] font-mono text-gray-500 flex-shrink-0">
+                                  {Math.round(debug.ocrScore * 100)}%
+                                </span>
+                                {/* Keyword → class */}
+                                <span className="text-[10px] text-gray-500 break-all min-w-0">
+                                  "<span className="font-mono text-gray-300">{debug.ocrMatchedKeyword}</span>"
+                                  {' '}→{' '}
+                                  <span className="text-gray-200 font-medium">
+                                    {classes.find((c) => c.id === debug.ocrMatchClassId)?.name}
+                                  </span>
+                                </span>
+                              </div>
                             ) : (
                               <p className="text-[10px] text-gray-700">Sin match con keywords configuradas</p>
                             )}
                           </div>
                         ) : (
                           <p className="text-[10px] text-gray-700">
-                            {debug.ocrText === null ? 'Sin texto detectado' : 'OCR aún en progreso…'}
+                            {debug.ocrText === null ? 'Sin texto detectado' : 'OCR en progreso…'}
                           </p>
                         )}
                       </div>

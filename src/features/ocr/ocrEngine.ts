@@ -1,13 +1,12 @@
 /**
  * OCR ENGINE — Tesseract.js wrapper.
  *
- * Lazy-loads the Tesseract worker on the first call (not at startup).
- * The worker is a singleton reused across calls to avoid initialization cost.
- *
  * Preprocessing pipeline before recognition:
- *   1. Upscale to ≥400px wide (Tesseract needs large enough text to work)
- *   2. Grayscale (reduces noise, speeds up recognition)
- *   3. Contrast boost ×1.5 around midpoint (improves low-contrast labels)
+ *   1. Upscale to >=400px wide
+ *   2. Grayscale + contrast boost x1.5
+ *
+ * cleanText pipeline (also exported for ocrMatcher keyword normalization):
+ *   NFD decompose -> strip combining diacritics (U+0300..U+036F) -> lowercase -> alphanum+space -> trim
  */
 
 type TesseractWorker = {
@@ -21,10 +20,7 @@ async function getWorker(): Promise<TesseractWorker> {
   if (!workerPromise) {
     workerPromise = (async () => {
       const { createWorker } = await import('tesseract.js')
-      // PSM 11 = sparse text: finds text regardless of layout — best for labels
-      const w = await createWorker('eng', 1, {
-        // logger: () => {},  // uncomment to silence Tesseract logs
-      })
+      const w = await createWorker('eng', 1, {})
       await (w as unknown as { setParameters: (p: Record<string, unknown>) => Promise<void> })
         .setParameters({ tessedit_pageseg_mode: '11' })
       return w as unknown as TesseractWorker
@@ -33,10 +29,6 @@ async function getWorker(): Promise<TesseractWorker> {
   return workerPromise
 }
 
-/**
- * Extract cleaned text from a canvas element.
- * Returns empty string if OCR fails or finds nothing.
- */
 export async function extractText(canvas: HTMLCanvasElement): Promise<string> {
   try {
     const processed = preprocess(canvas)
@@ -49,7 +41,6 @@ export async function extractText(canvas: HTMLCanvasElement): Promise<string> {
   }
 }
 
-/** Upscale + grayscale + contrast boost. Returns a new canvas. */
 function preprocess(src: HTMLCanvasElement): HTMLCanvasElement {
   const MIN_SIZE = 400
   const scale = src.width < MIN_SIZE ? MIN_SIZE / src.width : 1
@@ -73,11 +64,23 @@ function preprocess(src: HTMLCanvasElement): HTMLCanvasElement {
   return canvas
 }
 
-/** Lowercase, strip non-alphanumeric, collapse whitespace. */
-function cleanText(raw: string): string {
-  return raw
+/**
+ * Normalize text: remove diacritics, lowercase, keep only alphanum+space.
+ * Uses an explicit code-point loop to strip U+0300..U+036F after NFD decomposition,
+ * avoiding regex character-class encoding issues across environments.
+ */
+export function cleanText(raw: string): string {
+  const decomposed = raw.normalize('NFD')
+  let stripped = ''
+  for (let i = 0; i < decomposed.length; i++) {
+    const code = decomposed.charCodeAt(i)
+    // Skip combining diacritical marks (U+0300 through U+036F)
+    if (code >= 0x0300 && code <= 0x036f) continue
+    stripped += decomposed[i]
+  }
+  return stripped
     .toLowerCase()
-    .replace(/[^a-z0-9áéíóúüñ\s]/g, ' ')
+    .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
 }

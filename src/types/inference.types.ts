@@ -1,6 +1,8 @@
 import type { InferenceMode } from '@/features/inference/inferenceEngine'
+import type { OcrMatchType } from '@/features/ocr/ocrMatcher'
 
 export type { InferenceMode }
+export type { OcrMatchType }
 
 export interface DetectionResult {
   classId: string
@@ -28,12 +30,16 @@ export interface DebugPrediction {
   detectionLabel: string
   detectionBbox: [number, number, number, number]
   cropThumbnail: string | null
-  /** Last OCR text extracted from the object crop (cleaned, lowercase). */
+  /** Last OCR text extracted from the object crop (normalized: no diacritics, lowercase). */
   ocrText: string | null
-  /** Class whose keywords matched the OCR text, if any. */
+  /** Class whose keywords best matched the OCR text. */
   ocrMatchClassId: string | null
-  /** Specific keyword that triggered the match. */
+  /** Original keyword string that triggered the match. */
   ocrMatchedKeyword: string | null
+  /** How the match was found: 'exact' (substring) or 'fuzzy' (Levenshtein). */
+  ocrMatchType: OcrMatchType | null
+  /** Combined score: rawSimilarity * lengthWeight. Range 0–1, null if no match. */
+  ocrScore: number | null
 }
 
 export type InferenceStatus = 'idle' | 'running' | 'no_model' | 'error'

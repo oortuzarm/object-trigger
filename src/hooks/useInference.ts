@@ -24,6 +24,8 @@ export function useInference(videoRef: React.RefObject<HTMLVideoElement>) {
       const ocrMatch = ocrText ? matchKeywords(ocrText, classes) : null
       const ocrMatchClassId = ocrMatch?.classId ?? null
       const ocrMatchedKeyword = ocrMatch?.matchedKeyword ?? null
+      const ocrMatchType = ocrMatch?.matchType ?? null
+      const ocrScore = ocrMatch?.scoreOCR ?? 0
 
       const bestCls = classes.find((c) => c.id === bestGuess.classId)
       const debugPrediction = bestCls
@@ -41,6 +43,8 @@ export function useInference(videoRef: React.RefObject<HTMLVideoElement>) {
             ocrText: ocrText ?? null,
             ocrMatchClassId,
             ocrMatchedKeyword,
+            ocrMatchType,
+            ocrScore: ocrMatch ? ocrScore : null,
           }
         : null
 
@@ -50,11 +54,32 @@ export function useInference(videoRef: React.RefObject<HTMLVideoElement>) {
         const cls = classes.find((c) => c.id === stable.classId)
         if (cls) {
           const base = cls.confidenceThreshold
-          // OCR boost: when OCR confirms the same class as embedding winner,
-          // lower the required threshold by 20% (but never below 0.40).
-          const effective = stable.classId === ocrMatchClassId
-            ? Math.max(0.40, base * 0.80)
-            : base
+          const ocrConfirms = stable.classId === ocrMatchClassId
+
+          // ── Effective threshold (OCR can lower it when it confirms the class) ──
+          // scoreOCR >= 0.85: strong signal (exact/near-exact, long keyword)
+          //   → reduce threshold by 20%
+          // scoreOCR >= 0.60: moderate signal (exact short kw or good fuzzy long kw)
+          //   → reduce threshold by 13%
+          // scoreOCR <  0.60: weak/absent → no reduction
+          let effective = base
+          if (ocrConfirms) {
+            if (ocrScore >= 0.85) {
+              effective = Math.max(0.40, base * 0.80)
+            } else if (ocrScore >= 0.60) {
+              effective = Math.max(0.45, base * 0.87)
+            }
+
+            // ── Tiebreaker: ambiguous embedding + OCR confirms winner ─────────
+            // When the top-2 embedding gap is narrow, OCR matching the streak
+            // winner earns an extra 5% reduction to break the tie.
+            const sorted = [...bestGuess.allProbs].sort((a, b) => b - a)
+            const gap = (sorted[0] ?? 0) - (sorted[1] ?? 0)
+            if (gap < 0.10 && (sorted[0] ?? 0) > 0.30 && ocrScore >= 0.60) {
+              effective = Math.max(0.40, effective * 0.95)
+            }
+          }
+
           if (stable.avgConfidence >= effective) {
             currentDetection = {
               classId: cls.id,
